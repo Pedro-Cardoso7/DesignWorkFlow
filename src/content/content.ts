@@ -35,7 +35,7 @@ function makeButton(): HTMLButtonElement {
   btn.type = 'button';
   Object.assign(btn.style, {
     position: 'absolute',
-    top: '8px',
+    bottom: '8px',
     right: '8px',
     zIndex: '999999',
     width: '28px',

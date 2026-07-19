@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { extractTileKey } from './mj-scrape';
-import type { Asset, Collection, Outfit, StagingImage } from './types';
+import type { Asset, Collection, CropRect, MJMetadata, Outfit, StagingImage } from './types';
 
 export const DB_NAME = 'designworkflow';
 export const DB_VERSION = 1;
@@ -172,4 +172,72 @@ export async function findStagingByTileMarker(
 export async function getBlob(id: string): Promise<Blob | undefined> {
   const db = await getDb();
   return db.get('blobs', id);
+}
+
+export async function getStaging(id: string): Promise<StagingImage | undefined> {
+  const db = await getDb();
+  return db.get('staging', id);
+}
+
+export async function getAssetsForOutfit(outfitId: string): Promise<Asset[]> {
+  const db = await getDb();
+  const all = await db.getAllFromIndex('assets', 'by-outfit', outfitId);
+  return all.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export interface CropInput {
+  name: string;
+  crop: CropRect;
+  blob: Blob;
+}
+
+/**
+ * Persist a source image + N crops as a single Outfit with its Assets.
+ * Copies the source blob (doesn't reuse the staging blob id), so the outfit
+ * survives if the staging entry is later removed.
+ */
+export async function createOutfitWithAssets(
+  collectionId: string,
+  name: string,
+  sourceBlob: Blob,
+  metadata: MJMetadata,
+  crops: CropInput[],
+): Promise<Outfit> {
+  const db = await getDb();
+  const outfitId = crypto.randomUUID();
+  const sourceBlobId = crypto.randomUUID();
+  const assets: Asset[] = crops.map((c) => ({
+    id: crypto.randomUUID(),
+    outfitId,
+    name: c.name.trim() || 'Untitled',
+    createdAt: Date.now(),
+    crop: c.crop,
+    blobId: crypto.randomUUID(),
+  }));
+  const outfit: Outfit = {
+    id: outfitId,
+    collectionId,
+    name: name.trim() || 'Untitled outfit',
+    createdAt: Date.now(),
+    sourceImageBlobId: sourceBlobId,
+    assetIds: assets.map((a) => a.id),
+    metadata,
+  };
+
+  const tx = db.transaction(['blobs', 'outfits', 'assets', 'collections'], 'readwrite');
+  await tx.objectStore('blobs').put(sourceBlob, sourceBlobId);
+  for (let i = 0; i < assets.length; i++) {
+    await tx.objectStore('blobs').put(crops[i].blob, assets[i].blobId);
+    await tx.objectStore('assets').put(assets[i]);
+  }
+  await tx.objectStore('outfits').put(outfit);
+  const collection = await tx.objectStore('collections').get(collectionId);
+  if (collection) {
+    await tx.objectStore('collections').put({
+      ...collection,
+      outfitIds: [...collection.outfitIds, outfit.id],
+    });
+  }
+  await tx.done;
+  return outfit;
 }

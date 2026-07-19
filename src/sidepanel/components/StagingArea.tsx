@@ -53,6 +53,12 @@ function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: ()
     await onRemoved();
   };
 
+  const openCrop = () => {
+    chrome.runtime
+      .sendMessage({ type: 'OPEN_CROP_MODAL', stagingId: image.id } satisfies ExtensionMessage)
+      .catch(() => {});
+  };
+
   return (
     <div
       onMouseEnter={() => setHover(true)}
@@ -75,27 +81,50 @@ function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: ()
         />
       )}
       {hover && (
-        <button
-          onClick={remove}
-          style={{
-            position: 'absolute',
-            top: 4,
-            right: 4,
-            width: 22,
-            height: 22,
-            borderRadius: '50%',
-            border: 'none',
-            background: 'rgba(0,0,0,0.7)',
-            color: theme.text,
-            cursor: 'pointer',
-            fontSize: 14,
-            lineHeight: '20px',
-            padding: 0,
-          }}
-          title="Remove from staging"
-        >
-          ×
-        </button>
+        <>
+          <button
+            onClick={openCrop}
+            style={{
+              position: 'absolute',
+              bottom: 4,
+              left: 4,
+              right: 4,
+              height: 24,
+              borderRadius: theme.radius,
+              border: 'none',
+              background: 'rgba(124,92,255,0.95)',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: 0,
+            }}
+            title="Crop into outfit"
+          >
+            Crop →
+          </button>
+          <button
+            onClick={remove}
+            style={{
+              position: 'absolute',
+              top: 4,
+              right: 4,
+              width: 22,
+              height: 22,
+              borderRadius: '50%',
+              border: 'none',
+              background: 'rgba(0,0,0,0.7)',
+              color: theme.text,
+              cursor: 'pointer',
+              fontSize: 14,
+              lineHeight: '20px',
+              padding: 0,
+            }}
+            title="Remove from staging"
+          >
+            ×
+          </button>
+        </>
       )}
     </div>
   );
