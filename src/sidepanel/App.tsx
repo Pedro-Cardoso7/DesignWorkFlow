@@ -32,7 +32,7 @@ export function App() {
         <div style={{ padding: 12, fontSize: 12, color: theme.textMuted }}>Loading…</div>
       ) : state.activeCollection ? (
         <>
-          <StagingArea images={state.staging} />
+          <StagingArea images={state.staging} onChanged={state.reload} />
           <OutfitList outfits={state.outfits} />
         </>
       ) : (

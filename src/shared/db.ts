@@ -115,3 +115,59 @@ export async function getOutfitsForCollection(collectionId: string): Promise<Out
   const all = await db.getAllFromIndex('outfits', 'by-collection', collectionId);
   return all.sort((a, b) => a.createdAt - b.createdAt);
 }
+
+export async function addStagingImage(
+  collectionId: string,
+  blob: Blob,
+  metadata: import('./types').MJMetadata,
+): Promise<StagingImage> {
+  const db = await getDb();
+  const blobId = crypto.randomUUID();
+  const staging: StagingImage = {
+    id: crypto.randomUUID(),
+    collectionId,
+    addedAt: Date.now(),
+    blobId,
+    metadata,
+  };
+  const tx = db.transaction(['blobs', 'staging'], 'readwrite');
+  await tx.objectStore('blobs').put(blob, blobId);
+  await tx.objectStore('staging').put(staging);
+  await tx.done;
+  return staging;
+}
+
+export async function removeStagingImage(id: string): Promise<void> {
+  const db = await getDb();
+  const s = await db.get('staging', id);
+  if (!s) return;
+  const tx = db.transaction(['staging', 'blobs'], 'readwrite');
+  await tx.objectStore('blobs').delete(s.blobId);
+  await tx.objectStore('staging').delete(id);
+  await tx.done;
+}
+
+export async function findStagingBySourceUrl(
+  collectionId: string,
+  sourceUrl: string,
+): Promise<StagingImage | null> {
+  const all = await getStagingForCollection(collectionId);
+  return all.find((s) => s.metadata.sourceUrl === sourceUrl) ?? null;
+}
+
+export async function findStagingByTileMarker(
+  collectionId: string,
+  tileId: string,
+): Promise<StagingImage | null> {
+  const all = await getStagingForCollection(collectionId);
+  return (
+    all.find(
+      (s) => s.metadata.jobId === tileId || s.metadata.sourceUrl === tileId,
+    ) ?? null
+  );
+}
+
+export async function getBlob(id: string): Promise<Blob | undefined> {
+  const db = await getDb();
+  return db.get('blobs', id);
+}

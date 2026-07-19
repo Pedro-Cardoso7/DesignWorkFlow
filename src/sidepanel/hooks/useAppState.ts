@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Collection, Outfit, StagingImage } from '../../shared/types';
+import type { ExtensionMessage } from '../../shared/messages';
 import {
   createCollection as dbCreateCollection,
   deleteCollection as dbDeleteCollection,
@@ -54,6 +55,16 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
 
   useEffect(() => {
     reload();
+  }, [reload]);
+
+  useEffect(() => {
+    const listener = (msg: ExtensionMessage) => {
+      if (msg.type === 'STAGING_UPDATED') {
+        reload();
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
   }, [reload]);
 
   const activeCollection = collections.find((c) => c.id === activeId) ?? null;
