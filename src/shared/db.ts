@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { extractTileKey } from './mj-scrape';
 import type { Asset, Collection, Outfit, StagingImage } from './types';
 
 export const DB_NAME = 'designworkflow';
@@ -161,9 +162,10 @@ export async function findStagingByTileMarker(
 ): Promise<StagingImage | null> {
   const all = await getStagingForCollection(collectionId);
   return (
-    all.find(
-      (s) => s.metadata.jobId === tileId || s.metadata.sourceUrl === tileId,
-    ) ?? null
+    all.find((s) => {
+      const key = s.metadata.sourceUrl ? extractTileKey(s.metadata.sourceUrl) : null;
+      return key === tileId || s.metadata.sourceUrl === tileId;
+    }) ?? null
   );
 }
 

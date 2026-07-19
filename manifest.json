@@ -22,7 +22,9 @@
   "permissions": ["sidePanel", "storage", "tabs"],
   "host_permissions": [
     "https://www.midjourney.com/*",
-    "https://midjourney.com/*"
+    "https://midjourney.com/*",
+    "https://cdn.midjourney.com/*",
+    "https://*.midjourneyusercontent.com/*"
   ],
   "web_accessible_resources": [
     {

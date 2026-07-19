@@ -118,7 +118,19 @@ async function onClickButton(btn: HTMLButtonElement, img: HTMLImageElement, tile
     console.error('[MJDW] no source URL for image');
     return;
   }
-  const resp = await send({ type: 'ADD_STAGING', url: metadata.sourceUrl, metadata, tileId });
+  let resp: ExtensionResponse | undefined;
+  try {
+    resp = await send({ type: 'ADD_STAGING', url: metadata.sourceUrl, metadata, tileId });
+  } catch (err) {
+    styleButton(btn, 'idle');
+    console.error('[MJDW] add threw', err, 'lastError:', chrome.runtime.lastError);
+    return;
+  }
+  if (!resp) {
+    styleButton(btn, 'idle');
+    console.error('[MJDW] add got no response — background handler may have crashed. Check service worker console.', 'lastError:', chrome.runtime.lastError);
+    return;
+  }
   if (resp.ok && resp.stagingId) {
     stagingByTileId.set(tileId, resp.stagingId);
     styleButton(btn, 'added');

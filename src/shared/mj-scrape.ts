@@ -40,13 +40,24 @@ export function extractJobIdFromUrl(url: string): string | null {
 }
 
 /**
- * Stable per-tile identifier for deduplication within a page session and
- * between the content script and background. Prefers job id from URL; falls
- * back to the src itself.
+ * Extracts `{jobId}/{row_col}` — unique per tile in a MJ grid.
+ * MJ URL shape: https://cdn.midjourney.com/{uuid}/{row}_{col}_{size}_N.{ext}
+ * All 4 images in a grid share the UUID but differ by row_col (0_0..0_3).
+ */
+export function extractTileKey(url: string): string | null {
+  const m = url.match(/cdn\.midjourney\.com\/([0-9a-f-]{36})\/(\d+_\d+)_/i);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+/**
+ * Stable per-tile identifier for dedup within a page session and between the
+ * content script and background. Prefers the tile key ({jobId}/{row_col}) so
+ * grid siblings don't collide. Falls back to the URL (query stripped) so this
+ * still returns *something* unique when the pattern doesn't match.
  */
 export function getTileId(img: HTMLImageElement): string {
   const src = img.currentSrc || img.src;
-  return extractJobIdFromUrl(src) ?? src;
+  return extractTileKey(src) ?? src.split('?')[0];
 }
 
 export function extractMetadata(img: HTMLImageElement): MJMetadata {

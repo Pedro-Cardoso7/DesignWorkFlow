@@ -32,7 +32,12 @@ async function handleAddStaging(url: string, metadata: MJMetadata): Promise<Exte
     return { ok: true, stagingId: existing.id, alreadyExists: true };
   }
 
-  const resp = await fetch(url);
+  let resp: Response;
+  try {
+    resp = await fetch(url);
+  } catch (err) {
+    return { ok: false, error: `Fetch threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
   if (!resp.ok) {
     return { ok: false, error: `Fetch failed: ${resp.status} ${resp.statusText}` };
   }
@@ -90,6 +95,9 @@ chrome.runtime.onMessage.addListener((msg: ExtensionMessage, _sender, sendRespon
           sendResponse({ ok: true });
           break;
         }
+        case 'STAGING_UPDATED':
+          // Broadcast notification — not directed to bg, ignore silently.
+          return;
         default:
           sendResponse({ ok: false, error: `Unknown message type` });
       }
