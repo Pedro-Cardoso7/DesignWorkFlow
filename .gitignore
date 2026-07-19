@@ -1,0 +1,21 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / build
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.local
+
+# Chrome extension packaging
+*.zip
+*.crx
+*.pem
