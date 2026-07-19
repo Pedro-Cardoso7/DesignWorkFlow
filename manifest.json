@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "MJ Designer Workflow",
+  "version": "0.1.0",
+  "description": "Streamline Midjourney outfit crop and organize workflow.",
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.midjourney.com/*", "https://midjourney.com/*"],
+      "js": ["src/content/content.ts"]
+    }
+  ],
+  "action": {
+    "default_title": "MJ Designer Workflow"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "permissions": ["sidePanel", "storage", "tabs"],
+  "host_permissions": [
+    "https://www.midjourney.com/*",
+    "https://midjourney.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/modal/index.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
