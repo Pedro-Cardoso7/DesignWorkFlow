@@ -5,9 +5,10 @@ import { theme } from '../theme';
 
 interface OutfitListProps {
   outfits: Outfit[];
+  onOpen: (id: string) => void;
 }
 
-export function OutfitList({ outfits }: OutfitListProps) {
+export function OutfitList({ outfits, onOpen }: OutfitListProps) {
   return (
     <section style={{ padding: 12 }}>
       <div
@@ -40,7 +41,7 @@ export function OutfitList({ outfits }: OutfitListProps) {
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {outfits.map((outfit) => (
-            <OutfitCard key={outfit.id} outfit={outfit} />
+            <OutfitCard key={outfit.id} outfit={outfit} onOpen={() => onOpen(outfit.id)} />
           ))}
         </ul>
       )}
@@ -48,7 +49,7 @@ export function OutfitList({ outfits }: OutfitListProps) {
   );
 }
 
-function OutfitCard({ outfit }: { outfit: Outfit }) {
+function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) {
   const [assets, setAssets] = useState<Asset[]>([]);
 
   useEffect(() => {
@@ -64,12 +65,14 @@ function OutfitCard({ outfit }: { outfit: Outfit }) {
 
   return (
     <li
+      onClick={onOpen}
       style={{
         padding: 10,
         background: theme.panel,
         border: `1px solid ${theme.border}`,
         borderRadius: theme.radius,
         fontSize: 13,
+        cursor: 'pointer',
       }}
     >
       <div style={{ fontWeight: 500 }}>{outfit.name}</div>

@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ExtensionMessage } from '../shared/messages';
-import type { CropRect, StagingImage } from '../shared/types';
-import { createOutfitWithAssets, getBlob, getStaging, type CropInput } from '../shared/db';
+import type { CropRect, MJMetadata, Outfit, StagingImage } from '../shared/types';
+import {
+  createOutfitWithAssets,
+  getAssetsForOutfit,
+  getBlob,
+  getOutfit,
+  getStaging,
+  replaceOutfitAssets,
+  type CropInput,
+} from '../shared/db';
 
 interface Region {
   id: string;
@@ -16,32 +24,62 @@ const text = '#eaeaea';
 const muted = '#888';
 const accent = '#7c5cff';
 
+type Mode =
+  | { kind: 'create'; staging: StagingImage }
+  | { kind: 'edit'; outfit: Outfit };
+
 export function App() {
   const params = new URLSearchParams(window.location.search);
   const stagingId = params.get('stagingId');
+  const outfitId = params.get('outfitId');
 
-  const [staging, setStaging] = useState<StagingImage | null>(null);
+  const [mode, setMode] = useState<Mode | null>(null);
+  const [sourceMetadata, setSourceMetadata] = useState<MJMetadata | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [regions, setRegions] = useState<Region[]>([]);
+  const [history, setHistory] = useState<Region[][]>([]);
   const [outfitName, setOutfitName] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!stagingId) {
-      setError('No staging id provided.');
+    if (!stagingId && !outfitId) {
+      setError('No staging or outfit id provided.');
       return;
     }
     let objectUrl: string | null = null;
     let cancelled = false;
     (async () => {
-      const s = await getStaging(stagingId);
-      if (!s) {
-        if (!cancelled) setError(`Staging entry ${stagingId} not found.`);
-        return;
+      let sourceBlobId: string;
+      if (stagingId) {
+        const s = await getStaging(stagingId);
+        if (!s) {
+          if (!cancelled) setError(`Staging entry ${stagingId} not found.`);
+          return;
+        }
+        sourceBlobId = s.blobId;
+        setMode({ kind: 'create', staging: s });
+        setSourceMetadata(s.metadata);
+        setOutfitName(deriveDefaultName(s));
+      } else {
+        const outfit = await getOutfit(outfitId!);
+        if (!outfit) {
+          if (!cancelled) setError(`Outfit ${outfitId} not found.`);
+          return;
+        }
+        sourceBlobId = outfit.sourceImageBlobId;
+        setMode({ kind: 'edit', outfit });
+        setSourceMetadata(outfit.metadata);
+        setOutfitName(outfit.name);
+        const existing = await getAssetsForOutfit(outfit.id);
+        if (!cancelled) {
+          setRegions(
+            existing.map((a) => ({ id: crypto.randomUUID(), name: a.name, rect: a.crop })),
+          );
+        }
       }
-      const blob = await getBlob(s.blobId);
+      const blob = await getBlob(sourceBlobId);
       if (!blob) {
         if (!cancelled) setError('Source image blob missing.');
         return;
@@ -57,51 +95,78 @@ export function App() {
         if (!cancelled) setError('Failed to load image.');
       };
       img.src = objectUrl;
-      setStaging(s);
       setImageUrl(objectUrl);
-      setOutfitName(deriveDefaultName(s));
     })();
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [stagingId]);
+  }, [stagingId, outfitId]);
+
+  const pushHistory = (prev: Region[]) => {
+    setHistory((h) => [...h, prev]);
+  };
 
   const addRegion = (rect: CropRect) => {
     if (rect.width < 4 || rect.height < 4) return;
-    setRegions((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), name: `Region ${prev.length + 1}`, rect },
-    ]);
+    setRegions((prev) => {
+      pushHistory(prev);
+      return [...prev, { id: crypto.randomUUID(), name: `Region ${prev.length + 1}`, rect }];
+    });
   };
 
   const renameRegion = (id: string, name: string) =>
     setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, name } : r)));
 
   const deleteRegion = (id: string) =>
-    setRegions((prev) => prev.filter((r) => r.id !== id));
+    setRegions((prev) => {
+      pushHistory(prev);
+      return prev.filter((r) => r.id !== id);
+    });
+
+  const undo = () => {
+    setHistory((h) => {
+      if (h.length === 0) return h;
+      const prev = h[h.length - 1];
+      setRegions(prev);
+      return h.slice(0, -1);
+    });
+  };
 
   const save = async () => {
-    if (!staging || !image || regions.length === 0) return;
+    if (!mode || !image || regions.length === 0) return;
     setSaving(true);
     try {
-      const sourceBlob = await getBlob(staging.blobId);
-      if (!sourceBlob) throw new Error('Source blob disappeared');
       const crops: CropInput[] = [];
       for (const region of regions) {
         const blob = await cropBlob(image, region.rect);
         crops.push({ name: region.name, crop: region.rect, blob });
       }
-      await createOutfitWithAssets(
-        staging.collectionId,
-        outfitName,
-        sourceBlob,
-        staging.metadata,
-        crops,
-      );
-      chrome.runtime
-        .sendMessage({ type: 'STAGING_UPDATED', collectionId: staging.collectionId } satisfies ExtensionMessage)
-        .catch(() => {});
+      if (mode.kind === 'create') {
+        const sourceBlob = await getBlob(mode.staging.blobId);
+        if (!sourceBlob) throw new Error('Source blob disappeared');
+        await createOutfitWithAssets(
+          mode.staging.collectionId,
+          outfitName,
+          sourceBlob,
+          mode.staging.metadata,
+          crops,
+        );
+        chrome.runtime
+          .sendMessage({
+            type: 'STAGING_UPDATED',
+            collectionId: mode.staging.collectionId,
+          } satisfies ExtensionMessage)
+          .catch(() => {});
+      } else {
+        await replaceOutfitAssets(mode.outfit.id, crops);
+        chrome.runtime
+          .sendMessage({
+            type: 'OUTFIT_UPDATED',
+            outfitId: mode.outfit.id,
+          } satisfies ExtensionMessage)
+          .catch(() => {});
+      }
       window.close();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -109,34 +174,61 @@ export function App() {
     }
   };
 
+  const isEdit = mode?.kind === 'edit';
+  const saveDisabled = saving || regions.length === 0 || (!isEdit && !outfitName.trim());
+
   return (
     <div style={{ minHeight: '100vh', background: bg, color: text, fontFamily: 'system-ui, sans-serif', display: 'flex', flexDirection: 'column' }}>
       <header style={{ padding: '12px 16px', borderBottom: `1px solid ${border}`, display: 'flex', gap: 12, alignItems: 'center' }}>
-        <h1 style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>Crop into outfit</h1>
-        <input
-          value={outfitName}
-          onChange={(e) => setOutfitName(e.target.value)}
-          placeholder="Outfit name"
-          style={{ flex: 1, maxWidth: 320, background: panel, color: text, border: `1px solid ${border}`, borderRadius: 4, padding: '6px 10px', fontSize: 13 }}
-        />
+        <h1 style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>
+          {isEdit ? 'Edit outfit crops' : 'Crop into outfit'}
+        </h1>
+        {isEdit ? (
+          <span style={{ fontSize: 13, color: text, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {outfitName}
+          </span>
+        ) : (
+          <input
+            value={outfitName}
+            onChange={(e) => setOutfitName(e.target.value)}
+            placeholder="Outfit name"
+            style={{ flex: 1, maxWidth: 320, background: panel, color: text, border: `1px solid ${border}`, borderRadius: 4, padding: '6px 10px', fontSize: 13 }}
+          />
+        )}
         <span style={{ color: muted, fontSize: 12 }}>
           {regions.length} region{regions.length === 1 ? '' : 's'}
         </span>
         <button
-          onClick={save}
-          disabled={saving || regions.length === 0 || !outfitName.trim()}
+          onClick={undo}
+          disabled={history.length === 0}
           style={{
-            background: regions.length === 0 || !outfitName.trim() ? '#3a3a3a' : accent,
+            background: 'transparent',
+            color: history.length === 0 ? '#3a3a3a' : muted,
+            border: `1px solid ${border}`,
+            borderRadius: 4,
+            padding: '6px 12px',
+            fontSize: 13,
+            cursor: history.length === 0 ? 'not-allowed' : 'pointer',
+          }}
+          title="Undo last add/delete"
+        >
+          Undo
+        </button>
+        <button
+          onClick={save}
+          disabled={saveDisabled}
+          style={{
+            background: saveDisabled ? '#3a3a3a' : accent,
             color: '#fff',
             border: 'none',
             borderRadius: 4,
             padding: '6px 14px',
             fontSize: 13,
             fontWeight: 600,
-            cursor: saving || regions.length === 0 || !outfitName.trim() ? 'not-allowed' : 'pointer',
+            cursor: saveDisabled ? 'not-allowed' : 'pointer',
           }}
         >
-          {saving ? 'Saving…' : 'Save outfit'}
+          {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Save outfit'}
         </button>
         <button
           onClick={() => window.close()}
@@ -191,13 +283,13 @@ export function App() {
             </ul>
           )}
 
-          {staging?.metadata.prompt && (
+          {sourceMetadata?.prompt && (
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, color: muted, marginBottom: 4 }}>
                 Prompt
               </div>
               <div style={{ fontSize: 11, color: muted, lineHeight: 1.4, maxHeight: 120, overflow: 'auto' }}>
-                {staging.metadata.prompt}
+                {sourceMetadata.prompt}
               </div>
             </div>
           )}
@@ -348,3 +440,4 @@ async function cropBlob(image: HTMLImageElement, rect: CropRect): Promise<Blob> 
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob returned null'))), 'image/png');
   });
 }
+

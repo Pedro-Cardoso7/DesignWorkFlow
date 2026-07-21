@@ -105,7 +105,16 @@ chrome.runtime.onMessage.addListener((msg: ExtensionMessage, _sender, sendRespon
           sendResponse({ ok: true });
           break;
         }
+        case 'OPEN_RECROP_MODAL': {
+          const params = new URLSearchParams({ outfitId: msg.outfitId });
+          await chrome.tabs.create({
+            url: chrome.runtime.getURL('src/modal/index.html') + '?' + params.toString(),
+          });
+          sendResponse({ ok: true });
+          break;
+        }
         case 'STAGING_UPDATED':
+        case 'OUTFIT_UPDATED':
           // Broadcast notification — not directed to bg, ignore silently.
           return;
         default:

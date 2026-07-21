@@ -185,6 +185,91 @@ export async function getAssetsForOutfit(outfitId: string): Promise<Asset[]> {
   return all.sort((a, b) => a.createdAt - b.createdAt);
 }
 
+export async function getOutfit(id: string): Promise<Outfit | undefined> {
+  const db = await getDb();
+  return db.get('outfits', id);
+}
+
+export async function deleteOutfit(outfitId: string): Promise<void> {
+  const db = await getDb();
+  const outfit = await db.get('outfits', outfitId);
+  if (!outfit) return;
+  const tx = db.transaction(['collections', 'outfits', 'assets', 'blobs'], 'readwrite');
+  const assets = await tx.objectStore('assets').index('by-outfit').getAll(outfitId);
+  for (const asset of assets) {
+    await tx.objectStore('blobs').delete(asset.blobId);
+    await tx.objectStore('assets').delete(asset.id);
+  }
+  await tx.objectStore('blobs').delete(outfit.sourceImageBlobId);
+  await tx.objectStore('outfits').delete(outfitId);
+  const collection = await tx.objectStore('collections').get(outfit.collectionId);
+  if (collection) {
+    await tx.objectStore('collections').put({
+      ...collection,
+      outfitIds: collection.outfitIds.filter((id) => id !== outfitId),
+    });
+  }
+  await tx.done;
+}
+
+export async function deleteAsset(assetId: string): Promise<void> {
+  const db = await getDb();
+  const asset = await db.get('assets', assetId);
+  if (!asset) return;
+  const tx = db.transaction(['outfits', 'assets', 'blobs'], 'readwrite');
+  await tx.objectStore('blobs').delete(asset.blobId);
+  await tx.objectStore('assets').delete(assetId);
+  const outfit = await tx.objectStore('outfits').get(asset.outfitId);
+  if (outfit) {
+    await tx.objectStore('outfits').put({
+      ...outfit,
+      assetIds: outfit.assetIds.filter((id) => id !== assetId),
+    });
+  }
+  await tx.done;
+}
+
+/**
+ * Replace an outfit's asset set with a new list of crops (used by the
+ * add-assets / re-crop flow per FR-CR-7). All existing assets and their
+ * blobs are removed; the source image blob is preserved.
+ */
+export async function replaceOutfitAssets(
+  outfitId: string,
+  crops: CropInput[],
+): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(['outfits', 'assets', 'blobs'], 'readwrite');
+  const outfit = await tx.objectStore('outfits').get(outfitId);
+  if (!outfit) {
+    await tx.done;
+    return;
+  }
+  const existing = await tx.objectStore('assets').index('by-outfit').getAll(outfitId);
+  for (const asset of existing) {
+    await tx.objectStore('blobs').delete(asset.blobId);
+    await tx.objectStore('assets').delete(asset.id);
+  }
+  const now = Date.now();
+  const newAssets: Asset[] = crops.map((c) => ({
+    id: crypto.randomUUID(),
+    outfitId,
+    name: c.name.trim() || 'Untitled',
+    createdAt: now,
+    crop: c.crop,
+    blobId: crypto.randomUUID(),
+  }));
+  for (let i = 0; i < newAssets.length; i++) {
+    await tx.objectStore('blobs').put(crops[i].blob, newAssets[i].blobId);
+    await tx.objectStore('assets').put(newAssets[i]);
+  }
+  await tx.objectStore('outfits').put({
+    ...outfit,
+    assetIds: newAssets.map((a) => a.id),
+  });
+  await tx.done;
+}
+
 export interface CropInput {
   name: string;
   crop: CropRect;

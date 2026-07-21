@@ -3,7 +3,9 @@ import type { Collection, Outfit, StagingImage } from '../../shared/types';
 import type { ExtensionMessage } from '../../shared/messages';
 import {
   createCollection as dbCreateCollection,
+  deleteAsset as dbDeleteAsset,
   deleteCollection as dbDeleteCollection,
+  deleteOutfit as dbDeleteOutfit,
   renameCollection as dbRenameCollection,
   getActiveCollectionId,
   getAllCollections,
@@ -18,6 +20,8 @@ export interface AppStateSnapshot {
   activeCollection: Collection | null;
   staging: StagingImage[];
   outfits: Outfit[];
+  selectedOutfitId: string | null;
+  outfitRefreshKey: number;
 }
 
 export interface AppStateActions {
@@ -26,6 +30,9 @@ export interface AppStateActions {
   renameActive: (name: string) => Promise<void>;
   deleteActive: () => Promise<void>;
   setActive: (id: string) => Promise<void>;
+  selectOutfit: (id: string | null) => void;
+  deleteOutfit: (id: string) => Promise<void>;
+  deleteAsset: (id: string) => Promise<void>;
 }
 
 export function useAppState(): AppStateSnapshot & AppStateActions {
@@ -34,6 +41,8 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [staging, setStaging] = useState<StagingImage[]>([]);
   const [outfits, setOutfits] = useState<Outfit[]>([]);
+  const [selectedOutfitId, setSelectedOutfitId] = useState<string | null>(null);
+  const [outfitRefreshKey, setOutfitRefreshKey] = useState(0);
 
   const reload = useCallback(async () => {
     const all = await getAllCollections();
@@ -61,6 +70,9 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     const listener = (msg: ExtensionMessage) => {
       if (msg.type === 'STAGING_UPDATED') {
         reload();
+      } else if (msg.type === 'OUTFIT_UPDATED') {
+        reload();
+        setOutfitRefreshKey((k) => k + 1);
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -73,6 +85,7 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     async (name: string) => {
       const created = await dbCreateCollection(name);
       await setActiveCollectionId(created.id);
+      setSelectedOutfitId(null);
       await reload();
     },
     [reload],
@@ -91,12 +104,36 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     if (!activeId) return;
     await dbDeleteCollection(activeId);
     await setActiveCollectionId(null);
+    setSelectedOutfitId(null);
     await reload();
   }, [activeId, reload]);
 
   const setActive = useCallback(
     async (id: string) => {
       await setActiveCollectionId(id);
+      setSelectedOutfitId(null);
+      await reload();
+    },
+    [reload],
+  );
+
+  const selectOutfit = useCallback((id: string | null) => {
+    setSelectedOutfitId(id);
+  }, []);
+
+  const deleteOutfit = useCallback(
+    async (id: string) => {
+      await dbDeleteOutfit(id);
+      if (selectedOutfitId === id) setSelectedOutfitId(null);
+      await reload();
+    },
+    [reload, selectedOutfitId],
+  );
+
+  const deleteAsset = useCallback(
+    async (id: string) => {
+      await dbDeleteAsset(id);
+      setOutfitRefreshKey((k) => k + 1);
       await reload();
     },
     [reload],
@@ -108,10 +145,15 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     activeCollection,
     staging,
     outfits,
+    selectedOutfitId,
+    outfitRefreshKey,
     reload,
     createCollection,
     renameActive,
     deleteActive,
     setActive,
+    selectOutfit,
+    deleteOutfit,
+    deleteAsset,
   };
 }
