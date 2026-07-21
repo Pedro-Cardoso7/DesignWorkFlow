@@ -8,6 +8,7 @@ import {
   setActiveCollectionId,
 } from '../shared/db';
 import type { ExtensionMessage, ExtensionResponse } from '../shared/messages';
+import { ensurePng } from '../shared/png';
 import type { MJMetadata } from '../shared/types';
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -41,8 +42,17 @@ async function handleAddStaging(url: string, metadata: MJMetadata): Promise<Exte
   if (!resp.ok) {
     return { ok: false, error: `Fetch failed: ${resp.status} ${resp.statusText}` };
   }
-  const blob = await resp.blob();
-  const staging = await addStagingImage(collectionId, blob, metadata);
+  const rawBlob = await resp.blob();
+  let pngBlob: Blob;
+  try {
+    pngBlob = await ensurePng(rawBlob);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `PNG re-encode failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const staging = await addStagingImage(collectionId, pngBlob, metadata);
 
   chrome.runtime
     .sendMessage({ type: 'STAGING_UPDATED', collectionId } satisfies ExtensionMessage)

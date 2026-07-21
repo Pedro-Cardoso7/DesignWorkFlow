@@ -1,6 +1,7 @@
 import { Header } from './components/Header';
 import { OutfitList } from './components/OutfitList';
 import { StagingArea } from './components/StagingArea';
+import { ExportBar } from './components/ExportBar';
 import { useAppState } from './hooks/useAppState';
 import { theme } from './theme';
 
@@ -28,18 +29,22 @@ export function App() {
         outfitCount={state.outfits.length}
       />
 
-      {state.loading ? (
-        <div style={{ padding: 12, fontSize: 12, color: theme.textMuted }}>Loading…</div>
-      ) : state.activeCollection ? (
-        <>
-          <StagingArea images={state.staging} onChanged={state.reload} />
-          <OutfitList outfits={state.outfits} />
-        </>
-      ) : (
-        <div style={{ padding: 12, fontSize: 12, color: theme.textMuted }}>
-          Create a collection to get started.
-        </div>
-      )}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {state.loading ? (
+          <div style={{ padding: 12, fontSize: 12, color: theme.textMuted }}>Loading…</div>
+        ) : state.activeCollection ? (
+          <>
+            <StagingArea images={state.staging} onChanged={state.reload} />
+            <OutfitList outfits={state.outfits} />
+          </>
+        ) : (
+          <div style={{ padding: 12, fontSize: 12, color: theme.textMuted }}>
+            Create a collection to get started.
+          </div>
+        )}
+      </div>
+
+      <ExportBar activeCollectionId={state.activeCollection?.id ?? null} />
     </div>
   );
 }
