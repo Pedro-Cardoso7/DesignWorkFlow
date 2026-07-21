@@ -1,7 +1,7 @@
 import type { MJMetadata } from './types';
 
 export type ExtensionMessage =
-  | { type: 'ADD_STAGING'; url: string; metadata: MJMetadata; tileId: string }
+  | { type: 'ADD_STAGING'; url: string; fallbackUrl: string | null; metadata: MJMetadata; tileId: string }
   | { type: 'REMOVE_STAGING'; stagingId: string }
   | { type: 'IS_STAGED'; tileId: string }
   | { type: 'STAGING_UPDATED'; collectionId: string }

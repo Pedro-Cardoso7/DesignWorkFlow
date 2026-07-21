@@ -118,9 +118,17 @@ async function onClickButton(btn: HTMLButtonElement, img: HTMLImageElement, tile
     console.error('[MJDW] no source URL for image');
     return;
   }
+  const rawSrc = img.currentSrc || img.src || null;
+  const fallbackUrl = rawSrc && rawSrc !== metadata.sourceUrl ? rawSrc : null;
   let resp: ExtensionResponse | undefined;
   try {
-    resp = await send({ type: 'ADD_STAGING', url: metadata.sourceUrl, metadata, tileId });
+    resp = await send({
+      type: 'ADD_STAGING',
+      url: metadata.sourceUrl,
+      fallbackUrl,
+      metadata,
+      tileId,
+    });
   } catch (err) {
     styleButton(btn, 'idle');
     console.error('[MJDW] add threw', err, 'lastError:', chrome.runtime.lastError);

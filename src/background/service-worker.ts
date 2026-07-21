@@ -25,7 +25,56 @@ async function ensureActiveCollectionId(): Promise<string> {
   return created.id;
 }
 
-async function handleAddStaging(url: string, metadata: MJMetadata): Promise<ExtensionResponse> {
+interface FetchAttempt {
+  ok: true;
+  blob: Blob;
+  urlUsed: string;
+  fellBack: boolean;
+}
+interface FetchFailure {
+  ok: false;
+  error: string;
+}
+
+async function fetchWithFallback(
+  primaryUrl: string,
+  fallbackUrl: string | null,
+): Promise<FetchAttempt | FetchFailure> {
+  const primary = await tryFetch(primaryUrl);
+  if (primary.ok) {
+    return { ok: true, blob: primary.blob, urlUsed: primaryUrl, fellBack: false };
+  }
+  if (!fallbackUrl || fallbackUrl === primaryUrl) {
+    return { ok: false, error: primary.error };
+  }
+  const fallback = await tryFetch(fallbackUrl);
+  if (fallback.ok) {
+    return { ok: true, blob: fallback.blob, urlUsed: fallbackUrl, fellBack: true };
+  }
+  return {
+    ok: false,
+    error: `Primary fetch: ${primary.error}. Fallback fetch: ${fallback.error}`,
+  };
+}
+
+async function tryFetch(url: string): Promise<{ ok: true; blob: Blob } | { ok: false; error: string }> {
+  let resp: Response;
+  try {
+    resp = await fetch(url);
+  } catch (err) {
+    return { ok: false, error: `threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!resp.ok) {
+    return { ok: false, error: `${resp.status} ${resp.statusText}` };
+  }
+  return { ok: true, blob: await resp.blob() };
+}
+
+async function handleAddStaging(
+  url: string,
+  fallbackUrl: string | null,
+  metadata: MJMetadata,
+): Promise<ExtensionResponse> {
   const collectionId = await ensureActiveCollectionId();
 
   const existing = await findStagingBySourceUrl(collectionId, url);
@@ -33,26 +82,26 @@ async function handleAddStaging(url: string, metadata: MJMetadata): Promise<Exte
     return { ok: true, stagingId: existing.id, alreadyExists: true };
   }
 
-  let resp: Response;
-  try {
-    resp = await fetch(url);
-  } catch (err) {
-    return { ok: false, error: `Fetch threw: ${err instanceof Error ? err.message : String(err)}` };
+  const fetched = await fetchWithFallback(url, fallbackUrl);
+  if (!fetched.ok) {
+    return { ok: false, error: fetched.error };
   }
-  if (!resp.ok) {
-    return { ok: false, error: `Fetch failed: ${resp.status} ${resp.statusText}` };
-  }
-  const rawBlob = await resp.blob();
+
   let pngBlob: Blob;
   try {
-    pngBlob = await ensurePng(rawBlob);
+    pngBlob = await ensurePng(fetched.blob);
   } catch (err) {
     return {
       ok: false,
       error: `PNG re-encode failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const staging = await addStagingImage(collectionId, pngBlob, metadata);
+
+  const finalMetadata: MJMetadata = fetched.fellBack
+    ? { ...metadata, sourceUrl: fetched.urlUsed, lowResolution: true }
+    : metadata;
+
+  const staging = await addStagingImage(collectionId, pngBlob, finalMetadata);
 
   chrome.runtime
     .sendMessage({ type: 'STAGING_UPDATED', collectionId } satisfies ExtensionMessage)
@@ -86,7 +135,7 @@ chrome.runtime.onMessage.addListener((msg: ExtensionMessage, _sender, sendRespon
     try {
       switch (msg.type) {
         case 'ADD_STAGING': {
-          sendResponse(await handleAddStaging(msg.url, msg.metadata));
+          sendResponse(await handleAddStaging(msg.url, msg.fallbackUrl, msg.metadata));
           break;
         }
         case 'REMOVE_STAGING': {
