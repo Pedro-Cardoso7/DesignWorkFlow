@@ -7,6 +7,7 @@ import {
   deleteCollection as dbDeleteCollection,
   deleteOutfit as dbDeleteOutfit,
   renameCollection as dbRenameCollection,
+  renameOutfit as dbRenameOutfit,
   getActiveCollectionId,
   getAllCollections,
   getOutfitsForCollection,
@@ -32,6 +33,7 @@ export interface AppStateActions {
   setActive: (id: string) => Promise<void>;
   selectOutfit: (id: string | null) => void;
   deleteOutfit: (id: string) => Promise<void>;
+  renameOutfit: (id: string, name: string) => Promise<void>;
   deleteAsset: (id: string) => Promise<void>;
 }
 
@@ -130,6 +132,14 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     [reload, selectedOutfitId],
   );
 
+  const renameOutfit = useCallback(
+    async (id: string, name: string) => {
+      await dbRenameOutfit(id, name);
+      await reload();
+    },
+    [reload],
+  );
+
   const deleteAsset = useCallback(
     async (id: string) => {
       await dbDeleteAsset(id);
@@ -154,6 +164,7 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     setActive,
     selectOutfit,
     deleteOutfit,
+    renameOutfit,
     deleteAsset,
   };
 }

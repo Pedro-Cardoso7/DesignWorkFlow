@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getAssetsForOutfit, getBlob } from '../../shared/db';
 import type { Asset, Outfit } from '../../shared/types';
 import { theme } from '../theme';
@@ -6,9 +6,41 @@ import { theme } from '../theme';
 interface OutfitListProps {
   outfits: Outfit[];
   onOpen: (id: string) => void;
+  onRename: (id: string, name: string) => Promise<void>;
 }
 
-export function OutfitList({ outfits, onOpen }: OutfitListProps) {
+type SortKey = 'date-desc' | 'date-asc' | 'name-asc' | 'name-desc';
+
+const SORT_LABELS: Record<SortKey, string> = {
+  'date-desc': 'Newest first',
+  'date-asc': 'Oldest first',
+  'name-asc': 'Name A→Z',
+  'name-desc': 'Name Z→A',
+};
+
+export function OutfitList({ outfits, onOpen, onRename }: OutfitListProps) {
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<SortKey>('date-desc');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const base = q ? outfits.filter((o) => o.name.toLowerCase().includes(q)) : outfits;
+    const sorted = [...base];
+    sorted.sort((a, b) => {
+      switch (sort) {
+        case 'date-desc':
+          return b.createdAt - a.createdAt;
+        case 'date-asc':
+          return a.createdAt - b.createdAt;
+        case 'name-asc':
+          return a.name.localeCompare(b.name);
+        case 'name-desc':
+          return b.name.localeCompare(a.name);
+      }
+    });
+    return sorted;
+  }, [outfits, query, sort]);
+
   return (
     <section style={{ padding: 12 }}>
       <div
@@ -23,8 +55,68 @@ export function OutfitList({ outfits, onOpen }: OutfitListProps) {
         }}
       >
         <span>Outfits</span>
-        <span>{outfits.length}</span>
+        <span>
+          {query ? `${filtered.length} / ${outfits.length}` : outfits.length}
+        </span>
       </div>
+
+      {outfits.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: theme.input,
+              color: theme.text,
+              border: `1px solid ${theme.border}`,
+              borderRadius: theme.radius,
+              padding: '4px 8px',
+              fontSize: 12,
+            }}
+          />
+          {query && (
+            <button
+              onClick={() => setQuery('')}
+              title="Clear search"
+              style={{
+                background: 'transparent',
+                color: theme.textMuted,
+                border: `1px solid ${theme.border}`,
+                borderRadius: theme.radius,
+                padding: '2px 8px',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
+          )}
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            title="Sort outfits"
+            style={{
+              background: theme.input,
+              color: theme.text,
+              border: `1px solid ${theme.border}`,
+              borderRadius: theme.radius,
+              padding: '4px 6px',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {outfits.length === 0 ? (
         <div
           style={{
@@ -38,10 +130,28 @@ export function OutfitList({ outfits, onOpen }: OutfitListProps) {
         >
           Crop a staged image to produce your first outfit.
         </div>
+      ) : filtered.length === 0 ? (
+        <div
+          style={{
+            fontSize: 12,
+            color: theme.textMuted,
+            padding: 12,
+            background: theme.panel,
+            border: `1px dashed ${theme.border}`,
+            borderRadius: theme.radius,
+          }}
+        >
+          No outfits match "{query}".
+        </div>
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {outfits.map((outfit) => (
-            <OutfitCard key={outfit.id} outfit={outfit} onOpen={() => onOpen(outfit.id)} />
+          {filtered.map((outfit) => (
+            <OutfitCard
+              key={outfit.id}
+              outfit={outfit}
+              onOpen={() => onOpen(outfit.id)}
+              onRename={(name) => onRename(outfit.id, name)}
+            />
           ))}
         </ul>
       )}
@@ -49,9 +159,48 @@ export function OutfitList({ outfits, onOpen }: OutfitListProps) {
   );
 }
 
-function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) {
+function OutfitCard({
+  outfit,
+  onOpen,
+  onRename,
+}: {
+  outfit: Outfit;
+  onOpen: () => void;
+  onRename: (name: string) => Promise<void>;
+}) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(outfit.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(outfit.name);
+  }, [outfit.name, editing]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  const commit = async () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (next && next !== outfit.name) {
+      try {
+        await onRename(next);
+      } catch (err) {
+        console.error('[MJDW] rename outfit failed', err);
+        setDraft(outfit.name);
+      }
+    } else {
+      setDraft(outfit.name);
+    }
+  };
+
+  const cancel = () => {
+    setDraft(outfit.name);
+    setEditing(false);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -81,14 +230,14 @@ function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) 
 
   return (
     <li
-      onClick={onOpen}
+      onClick={editing ? undefined : onOpen}
       style={{
         padding: 10,
         background: theme.panel,
         border: `1px solid ${theme.border}`,
         borderRadius: theme.radius,
         fontSize: 13,
-        cursor: 'pointer',
+        cursor: editing ? 'default' : 'pointer',
       }}
     >
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -113,7 +262,47 @@ function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) 
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontWeight: 500 }}>{outfit.name}</span>
+            {editing ? (
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commit();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancel();
+                  }
+                }}
+                onBlur={commit}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: theme.input,
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: theme.radius,
+                  padding: '2px 6px',
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+              />
+            ) : (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditing(true);
+                }}
+                title="Click to rename"
+                style={{ fontWeight: 500, cursor: 'text' }}
+              >
+                {outfit.name}
+              </span>
+            )}
             {outfit.metadata.lowResolution && <LowResPill />}
           </div>
           <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>

@@ -64,6 +64,13 @@ export async function renameCollection(id: string, name: string): Promise<void> 
   await db.put('collections', { ...existing, name: name.trim() || existing.name });
 }
 
+export async function renameOutfit(id: string, name: string): Promise<void> {
+  const db = await getDb();
+  const existing = await db.get('outfits', id);
+  if (!existing) return;
+  await db.put('outfits', { ...existing, name: name.trim() || existing.name });
+}
+
 export async function deleteCollection(id: string): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(['collections', 'outfits', 'assets', 'staging', 'blobs'], 'readwrite');

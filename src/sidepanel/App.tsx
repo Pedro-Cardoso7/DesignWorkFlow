@@ -53,7 +53,7 @@ export function App() {
           ) : (
             <>
               <StagingArea images={state.staging} onChanged={state.reload} />
-              <OutfitList outfits={state.outfits} onOpen={state.selectOutfit} />
+              <OutfitList outfits={state.outfits} onOpen={state.selectOutfit} onRename={state.renameOutfit} />
             </>
           )
         ) : (
