@@ -47,6 +47,11 @@ export function App() {
   const [saveDefaultsStatus, setSaveDefaultsStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const defaultsAppliedRef = useRef(false);
   const canvasRef = useRef<CropCanvasHandle>(null);
+  const draftKey = stagingId ? `staging:${stagingId}` : outfitId ? `outfit:${outfitId}` : null;
+  const [draftReady, setDraftReady] = useState(false);
+  const draftRestoredRef = useRef(false);
+  const draftFrozenRef = useRef(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -56,8 +61,25 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!image || !mode || !draftKey) return;
+    if (draftRestoredRef.current) return;
+    draftRestoredRef.current = true;
+    (async () => {
+      const draft = await loadDraft(draftKey);
+      if (draft && draft.regions.length > 0) {
+        console.log('[MJDW] restored draft:', draft);
+        setRegions(draft.regions);
+        if (mode.kind === 'create' && draft.outfitName) setOutfitName(draft.outfitName);
+        defaultsAppliedRef.current = true;
+      }
+      setDraftReady(true);
+    })();
+  }, [image, mode, draftKey]);
+
+  useEffect(() => {
     if (!image || !mode || mode.kind !== 'create') return;
     if (defaultsAppliedRef.current) return;
+    if (!draftReady) return;
     defaultsAppliedRef.current = true;
     (async () => {
       const flag = await loadUseDefaultsPref();
@@ -70,7 +92,18 @@ export function App() {
         : buildDefaultOutfitRegions(image.width, image.height);
       setRegions(regs);
     })();
-  }, [image, mode]);
+  }, [image, mode, draftReady]);
+
+  useEffect(() => {
+    if (!draftKey || !draftReady || draftFrozenRef.current) return;
+    const handle = setTimeout(() => {
+      if (draftFrozenRef.current) return;
+      saveDraft(draftKey, { regions, outfitName }).catch((err) =>
+        console.error('[MJDW] draft save failed', err),
+      );
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [regions, outfitName, draftKey, draftReady]);
 
   const toggleUseDefaults = async () => {
     if (!image) return;
@@ -263,6 +296,8 @@ export function App() {
           } satisfies ExtensionMessage)
           .catch(() => {});
       }
+      draftFrozenRef.current = true;
+      if (draftKey) await clearDraft(draftKey).catch(() => {});
       window.close();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -273,8 +308,8 @@ export function App() {
   const isEdit = mode?.kind === 'edit';
   const saveDisabled = saving || regions.length === 0 || (!isEdit && !outfitName.trim());
 
-  const kbdRef = useRef({ regions, history, saveDisabled, save, undo, deleteRegion });
-  kbdRef.current = { regions, history, saveDisabled, save, undo, deleteRegion };
+  const kbdRef = useRef({ regions, history, saveDisabled, save, undo, deleteRegion, helpOpen });
+  kbdRef.current = { regions, history, saveDisabled, save, undo, deleteRegion, helpOpen };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -283,6 +318,11 @@ export function App() {
         !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 
       if (e.key === 'Escape') {
+        if (kbdRef.current.helpOpen) {
+          e.preventDefault();
+          setHelpOpen(false);
+          return;
+        }
         if (canvasRef.current?.cancelDrag()) {
           e.preventDefault();
           return;
@@ -296,6 +336,12 @@ export function App() {
         return;
       }
 
+      if (e.key === '?' && !inField) {
+        e.preventDefault();
+        setHelpOpen((v) => !v);
+        return;
+      }
+
       const s = kbdRef.current;
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
@@ -303,6 +349,22 @@ export function App() {
         if (s.history.length === 0) return;
         e.preventDefault();
         s.undo();
+        return;
+      }
+
+      if (!inField && (e.key === '+' || e.key === '=')) {
+        e.preventDefault();
+        canvasRef.current?.zoomIn();
+        return;
+      }
+      if (!inField && e.key === '-') {
+        e.preventDefault();
+        canvasRef.current?.zoomOut();
+        return;
+      }
+      if (!inField && e.key === '0') {
+        e.preventDefault();
+        canvasRef.current?.zoomReset();
         return;
       }
 
@@ -327,7 +389,7 @@ export function App() {
   }, []);
 
   return (
-    <div style={{ minHeight: '100vh', background: bg, color: text, fontFamily: 'system-ui, sans-serif', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100vh', background: bg, color: text, fontFamily: 'system-ui, sans-serif', display: 'flex', flexDirection: 'column' }}>
       <header style={{ padding: '12px 16px', borderBottom: `1px solid ${border}`, display: 'flex', gap: 12, alignItems: 'center' }}>
         <h1 style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>
           {isEdit ? 'Edit outfit crops' : 'Crop into outfit'}
@@ -458,14 +520,34 @@ export function App() {
         >
           Cancel
         </button>
+        <button
+          onClick={() => setHelpOpen((v) => !v)}
+          title="Shortcuts &amp; help (?)"
+          aria-pressed={helpOpen}
+          style={{
+            background: helpOpen ? accent : 'transparent',
+            color: helpOpen ? '#fff' : muted,
+            border: `1px solid ${border}`,
+            borderRadius: '50%',
+            width: 28,
+            height: 28,
+            padding: 0,
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          ?
+        </button>
       </header>
+      {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
       {error && (
         <div style={{ padding: 12, background: '#4a1e1e', color: '#ffb0b0', fontSize: 13 }}>{error}</div>
       )}
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <main style={{ flex: 1, padding: 16, overflow: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+        <main style={{ flex: 1, padding: 16, minWidth: 0, minHeight: 0, display: 'flex' }}>
           {image ? (
             <CropCanvas
               ref={canvasRef}
@@ -532,6 +614,127 @@ export function App() {
   );
 }
 
+function HelpPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.35)',
+          zIndex: 40,
+        }}
+      />
+      <div
+        role="dialog"
+        aria-label="Crop tool help"
+        style={{
+          position: 'fixed',
+          top: 60,
+          right: 16,
+          width: 360,
+          maxHeight: 'calc(100vh - 80px)',
+          overflow: 'auto',
+          background: panel,
+          color: text,
+          border: `1px solid ${border}`,
+          borderRadius: 6,
+          padding: 16,
+          fontSize: 12,
+          lineHeight: 1.5,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+          zIndex: 41,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Shortcuts &amp; help</div>
+          <button
+            onClick={onClose}
+            aria-label="Close help"
+            style={{ background: 'transparent', border: 'none', color: muted, cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        <HelpSection title="Regions">
+          <HelpRow k="Drag on image" v="Draw a new crop rectangle" />
+          <HelpRow k="Drag inside region" v="Move it" />
+          <HelpRow k="Drag corner handle" v="Resize" />
+          <HelpRow k="Click numbered button" v="Delete that region" />
+          <HelpRow k="Delete / Backspace" v="Delete last region" />
+          <HelpRow k="Ctrl+Z" v="Undo last add / delete" />
+          <HelpRow k="Rename in side panel" v="Sets asset filename in export" />
+        </HelpSection>
+
+        <HelpSection title="Zoom">
+          <HelpRow k="Ctrl / ⌘ + mouse wheel" v="Zoom toward cursor" />
+          <HelpRow k="+ or =" v="Zoom in" />
+          <HelpRow k="-" v="Zoom out" />
+          <HelpRow k="0" v="Reset to 100% (fit)" />
+        </HelpSection>
+
+        <HelpSection title="Pan">
+          <HelpRow k="Space + drag" v="Pan the canvas" />
+          <HelpRow k="Middle mouse drag" v="Pan the canvas" />
+          <HelpRow k="Scroll wheel" v="Scroll vertically" />
+        </HelpSection>
+
+        <HelpSection title="Aspect ratio">
+          <HelpRow k="Free / 1:1 / 4:3 / …" v="Constrain new region shape while drawing" />
+        </HelpSection>
+
+        <HelpSection title="Defaults (new outfits only)">
+          <HelpRow k="Defaults checkbox" v="Auto-add Head / Top / Bottom / Shoes on open" />
+          <HelpRow k="Save as defaults" v="Store current regions as the new default layout" />
+          <HelpRow k="Reload defaults" v="Re-apply the saved default layout" />
+          <HelpRow k="Restore built-in" v="Discard saved defaults and use built-in bands" />
+        </HelpSection>
+
+        <HelpSection title="Save / cancel">
+          <HelpRow k="Enter" v="Save outfit (when button is enabled)" />
+          <HelpRow k="Esc" v="Cancel drag → close popover → close modal" />
+          <HelpRow k="Close tab with regions" v="Draft auto-saved; resumes when you reopen" />
+        </HelpSection>
+
+        <HelpSection title="This popover">
+          <HelpRow k="?" v="Toggle this help" />
+        </HelpSection>
+      </div>
+    </>
+  );
+}
+
+function HelpSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6, color: muted, marginBottom: 4 }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>{children}</div>
+    </div>
+  );
+}
+
+function HelpRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      <div
+        style={{
+          flex: '0 0 42%',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: 11,
+          color: text,
+        }}
+      >
+        {k}
+      </div>
+      <div style={{ flex: 1, color: muted }}>{v}</div>
+    </div>
+  );
+}
+
 const ASPECT_PRESETS: { label: string; value: number | null }[] = [
   { label: 'Free', value: null },
   { label: '1:1', value: 1 },
@@ -583,7 +786,14 @@ interface CropCanvasProps {
 
 export interface CropCanvasHandle {
   cancelDrag: () => boolean;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  zoomReset: () => void;
 }
+
+const ZOOM_MIN = 0.1;
+const ZOOM_MAX = 12;
+const ZOOM_STEP = 1.2;
 
 interface MoveState {
   id: string;
@@ -604,11 +814,41 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [scale, setScale] = useState(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fitScale, setFitScale] = useState(1);
+  const [zoom, setZoom] = useState(1);
   const [drag, setDrag] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null);
   const [move, setMove] = useState<MoveState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [panning, setPanning] = useState(false);
+
+  const scale = fitScale * zoom;
+
+  const applyZoom = (nextZoom: number, anchorClientX?: number, anchorClientY?: number) => {
+    const wrap = scrollRef.current;
+    const canvas = canvasRef.current;
+    const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom));
+    if (clamped === zoom) return;
+    if (!wrap || !canvas || anchorClientX == null || anchorClientY == null) {
+      setZoom(clamped);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const imgX = (anchorClientX - rect.left) / scale;
+    const imgY = (anchorClientY - rect.top) / scale;
+    const newScale = fitScale * clamped;
+    setZoom(clamped);
+    requestAnimationFrame(() => {
+      if (!scrollRef.current) return;
+      const wrapRect = scrollRef.current.getBoundingClientRect();
+      const newLeft = imgX * newScale - (anchorClientX - wrapRect.left);
+      const newTop = imgY * newScale - (anchorClientY - wrapRect.top);
+      scrollRef.current.scrollLeft = newLeft;
+      scrollRef.current.scrollTop = newTop;
+    });
+  };
 
   useImperativeHandle(
     ref,
@@ -620,16 +860,83 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
         }
         return false;
       },
+      zoomIn: () => applyZoom(zoom * ZOOM_STEP),
+      zoomOut: () => applyZoom(zoom / ZOOM_STEP),
+      zoomReset: () => setZoom(1),
     }),
-    [drag],
+    [drag, zoom, fitScale],
   );
 
   useEffect(() => {
-    const maxW = Math.min(window.innerWidth - 320, 1400);
-    const maxH = window.innerHeight - 120;
+    const wrap = scrollRef.current;
+    if (!wrap) return;
+    const maxW = wrap.clientWidth || Math.min(window.innerWidth - 320, 1400);
+    const maxH = wrap.clientHeight || window.innerHeight - 120;
     const s = Math.min(1, maxW / image.width, maxH / image.height);
-    setScale(s);
+    setFitScale(s);
+    setZoom(1);
   }, [image]);
+
+  useEffect(() => {
+    const wrap = scrollRef.current;
+    if (!wrap) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const dir = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      applyZoom(zoom * dir, e.clientX, e.clientY);
+    };
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    return () => wrap.removeEventListener('wheel', onWheel);
+  }, [zoom, fitScale]);
+
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        e.preventDefault();
+        setSpaceHeld(true);
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') setSpaceHeld(false);
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!panning) return;
+    const wrap = scrollRef.current;
+    if (!wrap) return;
+    let lastX = 0;
+    let lastY = 0;
+    let inited = false;
+    const onMove = (e: MouseEvent) => {
+      if (!inited) {
+        lastX = e.clientX;
+        lastY = e.clientY;
+        inited = true;
+        return;
+      }
+      wrap.scrollLeft -= e.clientX - lastX;
+      wrap.scrollTop -= e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    };
+    const onUp = () => setPanning(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [panning]);
 
   const dispW = image.width * scale;
   const dispH = image.height * scale;
@@ -748,6 +1055,11 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
   };
 
   const onMouseDown = (e: React.MouseEvent) => {
+    if (spaceHeld || e.button === 1) {
+      e.preventDefault();
+      setPanning(true);
+      return;
+    }
     const { x, y } = toCanvasCoords(e);
     const hit = hitTest(x, y);
     if (hit) {
@@ -792,57 +1104,91 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
     setResize({ id: r.id, originX: r.rect.x * scale, originY: r.rect.y * scale });
   };
 
+  const canvasCursor = panning
+    ? 'grabbing'
+    : spaceHeld
+      ? 'grab'
+      : resize
+        ? 'nwse-resize'
+        : move || hoverId
+          ? 'move'
+          : 'crosshair';
+
   return (
-    <div style={{ position: 'relative' }}>
-      <canvas
-        ref={canvasRef}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={() => { setDrag(null); setHoverId(null); }}
-        style={{ display: 'block', cursor: resize ? 'nwse-resize' : move || hoverId ? 'move' : 'crosshair', border: `1px solid ${border}` }}
-      />
-      {regions.map((r, i) => (
-        <div key={r.id}>
-          <button
-            onClick={() => onDelete(r.id)}
-            title={`Delete ${r.name}`}
-            style={{
-              position: 'absolute',
-              left: r.rect.x * scale + r.rect.width * scale - 22,
-              top: r.rect.y * scale + 2,
-              width: 20,
-              height: 20,
-              border: 'none',
-              borderRadius: '50%',
-              background: 'rgba(0,0,0,0.75)',
-              color: '#fff',
-              cursor: 'pointer',
-              fontSize: 12,
-              lineHeight: '18px',
-              padding: 0,
-            }}
-          >
-            {i + 1}
-          </button>
-          <div
-            onMouseDown={(e) => startResize(r, e)}
-            title={`Resize ${r.name}`}
-            style={{
-              position: 'absolute',
-              left: r.rect.x * scale + r.rect.width * scale - 8,
-              top: r.rect.y * scale + r.rect.height * scale - 8,
-              width: 14,
-              height: 14,
-              background: accent,
-              border: '2px solid #fff',
-              borderRadius: 2,
-              cursor: 'nwse-resize',
-              boxSizing: 'border-box',
-            }}
-          />
-        </div>
-      ))}
+    <div
+      ref={scrollRef}
+      style={{ position: 'relative', overflow: 'auto', flex: 1, minWidth: 0, minHeight: 0 }}
+    >
+      <div style={{ position: 'relative', width: dispW, height: dispH }}>
+        <canvas
+          ref={canvasRef}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onMouseLeave={() => { setDrag(null); setHoverId(null); }}
+          style={{ display: 'block', cursor: canvasCursor, border: `1px solid ${border}` }}
+        />
+        {regions.map((r, i) => (
+          <div key={r.id}>
+            <button
+              onClick={() => onDelete(r.id)}
+              title={`Delete ${r.name}`}
+              style={{
+                position: 'absolute',
+                left: r.rect.x * scale + r.rect.width * scale - 22,
+                top: r.rect.y * scale + 2,
+                width: 20,
+                height: 20,
+                border: 'none',
+                borderRadius: '50%',
+                background: 'rgba(0,0,0,0.75)',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: 12,
+                lineHeight: '18px',
+                padding: 0,
+              }}
+            >
+              {i + 1}
+            </button>
+            <div
+              onMouseDown={(e) => startResize(r, e)}
+              title={`Resize ${r.name}`}
+              style={{
+                position: 'absolute',
+                left: r.rect.x * scale + r.rect.width * scale - 8,
+                top: r.rect.y * scale + r.rect.height * scale - 8,
+                width: 14,
+                height: 14,
+                background: accent,
+                border: '2px solid #fff',
+                borderRadius: 2,
+                cursor: 'nwse-resize',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+        ))}
+      </div>
+      <div
+        title="Zoom (Ctrl+wheel, +/-, 0 to reset; Space+drag to pan)"
+        style={{
+          position: 'sticky',
+          bottom: 8,
+          left: 8,
+          marginLeft: 8,
+          marginTop: -32,
+          display: 'inline-block',
+          padding: '3px 8px',
+          background: 'rgba(0,0,0,0.65)',
+          color: text,
+          fontSize: 11,
+          borderRadius: 3,
+          pointerEvents: 'none',
+        }}
+      >
+        {Math.round(zoom * 100)}%
+      </div>
     </div>
   );
 });
@@ -932,6 +1278,35 @@ async function loadUseDefaultsPref(): Promise<boolean> {
 
 async function saveUseDefaultsPref(v: boolean) {
   await chrome.storage.local.set({ [USE_DEFAULTS_KEY]: v });
+}
+
+const DRAFT_KEY_PREFIX = 'mjdw_draft_v1:';
+
+interface Draft {
+  regions: Region[];
+  outfitName: string;
+}
+
+async function loadDraft(key: string): Promise<Draft | null> {
+  try {
+    const full = DRAFT_KEY_PREFIX + key;
+    const res = await chrome.storage.session.get(full);
+    const val = res[full];
+    if (!val || !Array.isArray(val.regions)) return null;
+    return val as Draft;
+  } catch {
+    return null;
+  }
+}
+
+async function saveDraft(key: string, draft: Draft) {
+  const full = DRAFT_KEY_PREFIX + key;
+  await chrome.storage.session.set({ [full]: draft });
+}
+
+async function clearDraft(key: string) {
+  const full = DRAFT_KEY_PREFIX + key;
+  await chrome.storage.session.remove(full);
 }
 
 function deriveDefaultName(s: StagingImage): string {

@@ -112,7 +112,10 @@ function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) 
           )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 500 }}>{outfit.name}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 500 }}>{outfit.name}</span>
+            {outfit.metadata.lowResolution && <LowResPill />}
+          </div>
           <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
             {outfit.assetIds.length} asset{outfit.assetIds.length === 1 ? '' : 's'}
             {outfit.metadata.prompt ? ` — ${truncate(outfit.metadata.prompt, 60)}` : ''}
@@ -190,4 +193,26 @@ function AssetThumb({ asset }: { asset: Asset }) {
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function LowResPill() {
+  return (
+    <span
+      title="Source image is low-resolution — full-res fetch failed at capture time"
+      style={{
+        fontSize: 9,
+        fontWeight: 600,
+        letterSpacing: 0.4,
+        textTransform: 'uppercase',
+        color: '#ffb44a',
+        background: 'rgba(255,180,74,0.12)',
+        border: '1px solid rgba(255,180,74,0.45)',
+        borderRadius: 3,
+        padding: '1px 5px',
+        lineHeight: 1.3,
+      }}
+    >
+      Low-res
+    </span>
+  );
 }

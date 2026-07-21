@@ -68,6 +68,24 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
         </div>
       </div>
 
+      {outfit.metadata.lowResolution && (
+        <div
+          role="status"
+          style={{
+            fontSize: 11,
+            lineHeight: 1.4,
+            color: '#ffb44a',
+            background: 'rgba(255,180,74,0.10)',
+            border: '1px solid rgba(255,180,74,0.35)',
+            borderRadius: theme.radius,
+            padding: '6px 8px',
+          }}
+        >
+          <strong style={{ fontWeight: 600 }}>Low-resolution source.</strong>{' '}
+          Full-res fetch failed at capture time; the source image is the DOM thumbnail. Assets exported from this outfit will be low quality.
+        </div>
+      )}
+
       {sourceUrl && (
         <div
           onClick={() =>
