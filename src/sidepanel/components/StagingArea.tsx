@@ -3,13 +3,21 @@ import { getBlob, removeStagingImage } from '../../shared/db';
 import type { ExtensionMessage } from '../../shared/messages';
 import type { StagingImage } from '../../shared/types';
 import { theme } from '../theme';
+import { ImagePreview } from './ImagePreview';
 
 interface StagingAreaProps {
   images: StagingImage[];
   onChanged: () => void | Promise<void>;
 }
 
+interface PreviewTarget {
+  blobId: string;
+  caption: string | null;
+}
+
 export function StagingArea({ images, onChanged }: StagingAreaProps) {
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
+
   return (
     <section style={{ padding: 12, borderBottom: `1px solid ${theme.border}` }}>
       <SectionTitle count={images.length}>Staging</SectionTitle>
@@ -18,15 +26,37 @@ export function StagingArea({ images, onChanged }: StagingAreaProps) {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
           {images.map((img) => (
-            <StagingThumb key={img.id} image={img} onRemoved={onChanged} />
+            <StagingThumb
+              key={img.id}
+              image={img}
+              onRemoved={onChanged}
+              onPreview={() =>
+                setPreview({ blobId: img.blobId, caption: img.metadata.prompt ?? null })
+              }
+            />
           ))}
         </div>
+      )}
+      {preview && (
+        <ImagePreview
+          blobId={preview.blobId}
+          caption={preview.caption}
+          onClose={() => setPreview(null)}
+        />
       )}
     </section>
   );
 }
 
-function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: () => void | Promise<void> }) {
+function StagingThumb({
+  image,
+  onRemoved,
+  onPreview,
+}: {
+  image: StagingImage;
+  onRemoved: () => void | Promise<void>;
+  onPreview: () => void;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [hover, setHover] = useState(false);
 
@@ -45,7 +75,8 @@ function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: ()
     };
   }, [image.blobId]);
 
-  const remove = async () => {
+  const remove = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     await removeStagingImage(image.id);
     chrome.runtime
       .sendMessage({ type: 'STAGING_UPDATED', collectionId: image.collectionId } satisfies ExtensionMessage)
@@ -53,7 +84,8 @@ function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: ()
     await onRemoved();
   };
 
-  const openCrop = () => {
+  const openCrop = (e: React.MouseEvent) => {
+    e.stopPropagation();
     chrome.runtime
       .sendMessage({ type: 'OPEN_CROP_MODAL', stagingId: image.id } satisfies ExtensionMessage)
       .catch(() => {});
@@ -61,6 +93,7 @@ function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: ()
 
   return (
     <div
+      onClick={onPreview}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -70,8 +103,9 @@ function StagingThumb({ image, onRemoved }: { image: StagingImage; onRemoved: ()
         borderRadius: theme.radius,
         border: `1px solid ${theme.border}`,
         overflow: 'hidden',
+        cursor: 'zoom-in',
       }}
-      title={image.metadata.prompt ?? ''}
+      title={image.metadata.prompt ?? 'Click to preview'}
     >
       {url && (
         <img

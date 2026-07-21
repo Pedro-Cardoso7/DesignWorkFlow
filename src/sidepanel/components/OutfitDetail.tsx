@@ -3,6 +3,12 @@ import { getAssetsForOutfit, getBlob } from '../../shared/db';
 import type { ExtensionMessage } from '../../shared/messages';
 import type { Asset, Outfit } from '../../shared/types';
 import { buttonStyle, theme } from '../theme';
+import { ImagePreview } from './ImagePreview';
+
+interface PreviewTarget {
+  blobId: string;
+  caption: string | null;
+}
 
 interface Props {
   outfit: Outfit;
@@ -15,6 +21,7 @@ interface Props {
 export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, refreshKey }: Props) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,12 +70,20 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
 
       {sourceUrl && (
         <div
+          onClick={() =>
+            setPreview({
+              blobId: outfit.sourceImageBlobId,
+              caption: outfit.metadata.prompt ?? null,
+            })
+          }
           style={{
             background: theme.input,
             border: `1px solid ${theme.border}`,
             borderRadius: theme.radius,
             overflow: 'hidden',
+            cursor: 'zoom-in',
           }}
+          title="Click to preview"
         >
           <img
             src={sourceUrl}
@@ -126,7 +141,12 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
           {assets.map((a) => (
-            <AssetThumb key={a.id} asset={a} onDelete={() => onDeleteAsset(a.id)} />
+            <AssetThumb
+              key={a.id}
+              asset={a}
+              onDelete={() => onDeleteAsset(a.id)}
+              onPreview={() => setPreview({ blobId: a.blobId, caption: a.name })}
+            />
           ))}
         </div>
       )}
@@ -139,11 +159,27 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
           Delete outfit
         </button>
       </div>
+
+      {preview && (
+        <ImagePreview
+          blobId={preview.blobId}
+          caption={preview.caption}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </section>
   );
 }
 
-function AssetThumb({ asset, onDelete }: { asset: Asset; onDelete: () => void }) {
+function AssetThumb({
+  asset,
+  onDelete,
+  onPreview,
+}: {
+  asset: Asset;
+  onDelete: () => void;
+  onPreview: () => void;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [hover, setHover] = useState(false);
 
@@ -164,9 +200,10 @@ function AssetThumb({ asset, onDelete }: { asset: Asset; onDelete: () => void })
 
   return (
     <div
+      onClick={onPreview}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={asset.name}
+      title={`${asset.name} — click to preview`}
       style={{
         aspectRatio: '1 / 1',
         background: theme.input,
@@ -174,6 +211,7 @@ function AssetThumb({ asset, onDelete }: { asset: Asset; onDelete: () => void })
         border: `1px solid ${theme.border}`,
         overflow: 'hidden',
         position: 'relative',
+        cursor: 'zoom-in',
       }}
     >
       {url && (
@@ -185,7 +223,10 @@ function AssetThumb({ asset, onDelete }: { asset: Asset; onDelete: () => void })
       )}
       {hover && (
         <button
-          onClick={onDelete}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
           title="Delete asset"
           style={{
             position: 'absolute',
