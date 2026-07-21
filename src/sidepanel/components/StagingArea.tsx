@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { getBlob, removeStagingImage } from '../../shared/db';
+import { createOutfitWithAssets, getBlob, removeStagingImage } from '../../shared/db';
 import type { ExtensionMessage } from '../../shared/messages';
 import type { StagingImage } from '../../shared/types';
+import { ASSET_TYPES, type AssetType } from '../../shared/types';
+import { deriveOutfitNameFromStaging } from '../../shared/naming';
 import { theme } from '../theme';
 import { ImagePreview } from './ImagePreview';
 
@@ -139,6 +141,43 @@ function StagingThumb({
       .catch(() => {});
   };
 
+  const [sending, setSending] = useState(false);
+  const sendAs = async (type: AssetType) => {
+    setSending(true);
+    try {
+      const blob = await getBlob(image.blobId);
+      if (!blob) throw new Error('Source blob missing');
+      const dims = await readImageDimensions(blob);
+      const name = deriveOutfitNameFromStaging(image);
+      const outfit = await createOutfitWithAssets(
+        image.collectionId,
+        name,
+        blob,
+        image.metadata,
+        [
+          {
+            name: type,
+            crop: { x: 0, y: 0, width: dims.width, height: dims.height },
+            blob,
+            type,
+          },
+        ],
+      );
+      await removeStagingImage(image.id);
+      chrome.runtime
+        .sendMessage({ type: 'STAGING_UPDATED', collectionId: image.collectionId } satisfies ExtensionMessage)
+        .catch(() => {});
+      chrome.runtime
+        .sendMessage({ type: 'OUTFIT_UPDATED', outfitId: outfit.id } satisfies ExtensionMessage)
+        .catch(() => {});
+      await onRemoved();
+    } catch (err) {
+      console.error('[MJDW] send-as failed', err);
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
     <div
       onClick={onPreview}
@@ -164,27 +203,69 @@ function StagingThumb({
       )}
       {hover && (
         <>
-          <button
-            onClick={openCrop}
+          <div
             style={{
               position: 'absolute',
               bottom: 4,
               left: 4,
               right: 4,
-              height: 24,
-              borderRadius: theme.radius,
-              border: 'none',
-              background: 'rgba(124,92,255,0.95)',
-              color: '#fff',
-              cursor: 'pointer',
-              fontSize: 11,
-              fontWeight: 600,
-              padding: 0,
+              display: 'flex',
+              gap: 4,
             }}
-            title="Crop into outfit"
           >
-            Crop →
-          </button>
+            <button
+              onClick={openCrop}
+              disabled={sending}
+              style={{
+                flex: 1,
+                height: 24,
+                borderRadius: theme.radius,
+                border: 'none',
+                background: 'rgba(124,92,255,0.95)',
+                color: '#fff',
+                cursor: sending ? 'not-allowed' : 'pointer',
+                fontSize: 11,
+                fontWeight: 600,
+                padding: 0,
+              }}
+              title="Crop into outfit"
+            >
+              Crop →
+            </button>
+            <select
+              value=""
+              disabled={sending}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                e.stopPropagation();
+                const val = e.target.value as AssetType | '';
+                if (val) sendAs(val);
+                e.target.value = '';
+              }}
+              title="Send whole image as single asset of chosen type"
+              style={{
+                flex: 1,
+                height: 24,
+                borderRadius: theme.radius,
+                border: 'none',
+                background: 'rgba(0,0,0,0.7)',
+                color: '#fff',
+                cursor: sending ? 'not-allowed' : 'pointer',
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '0 4px',
+              }}
+            >
+              <option value="" disabled>
+                {sending ? 'Sending…' : 'Send as ▾'}
+              </option>
+              {ASSET_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={remove}
             style={{
@@ -242,6 +323,23 @@ function SectionTitle({
       </span>
     </div>
   );
+}
+
+function readImageDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const { naturalWidth, naturalHeight } = img;
+      URL.revokeObjectURL(url);
+      resolve({ width: naturalWidth, height: naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to decode image'));
+    };
+    img.src = url;
+  });
 }
 
 function Empty({ children }: { children: React.ReactNode }) {

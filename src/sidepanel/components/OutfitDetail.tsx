@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { getAssetsForOutfit, getBlob } from '../../shared/db';
 import type { ExtensionMessage } from '../../shared/messages';
-import type { Asset, Outfit } from '../../shared/types';
+import type { Asset, AssetType, Outfit } from '../../shared/types';
+import { ASSET_TYPES } from '../../shared/types';
 import { buttonStyle, theme } from '../theme';
 import { ImagePreview } from './ImagePreview';
 
@@ -17,6 +18,8 @@ interface Props {
   onDeleteAsset: (assetId: string) => Promise<{ asset: Asset; blob: Blob } | null>;
   onRestoreAsset: (asset: Asset, blob: Blob) => Promise<void>;
   onRename: (name: string) => Promise<void>;
+  onUpdateAssetType: (assetId: string, type: AssetType) => Promise<void>;
+  onSendToStaging: () => Promise<void>;
   refreshKey: number;
 }
 
@@ -35,6 +38,8 @@ export function OutfitDetail({
   onDeleteAsset,
   onRestoreAsset,
   onRename,
+  onUpdateAssetType,
+  onSendToStaging,
   refreshKey,
 }: Props) {
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -94,6 +99,15 @@ export function OutfitDetail({
     }
   };
 
+  const handleTypeChange = async (assetId: string, type: AssetType) => {
+    setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, type } : a)));
+    try {
+      await onUpdateAssetType(assetId, type);
+    } catch (err) {
+      console.error('[MJDW] update asset type failed', err);
+    }
+  };
+
   const handleUndo = async () => {
     if (!undoState) return;
     const snap = undoState;
@@ -144,6 +158,13 @@ export function OutfitDetail({
       `Delete "${outfit.name}" and its ${assets.length} asset${assets.length === 1 ? '' : 's'}? This cannot be undone.`,
     );
     if (ok) await onDeleteOutfit();
+  };
+
+  const confirmSendToStaging = async () => {
+    const ok = window.confirm(
+      `Send "${outfit.name}" back to staging? ${assets.length} asset${assets.length === 1 ? '' : 's'} will be discarded (source image kept).`,
+    );
+    if (ok) await onSendToStaging();
   };
 
   const addAssets = () => {
@@ -329,14 +350,22 @@ export function OutfitDetail({
               asset={a}
               onDelete={() => handleDeleteAsset(a.id)}
               onPreview={() => setPreview({ blobId: a.blobId, caption: a.name })}
+              onTypeChange={(t) => handleTypeChange(a.id, t)}
             />
           ))}
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+      <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
         <button style={buttonStyle('primary')} onClick={addAssets}>
           Add / edit crops
+        </button>
+        <button
+          style={buttonStyle('ghost')}
+          onClick={confirmSendToStaging}
+          title="Discard this outfit's crops and put the source image back in staging"
+        >
+          Send to staging
         </button>
         <button style={buttonStyle('danger')} onClick={confirmDeleteOutfit}>
           Delete outfit
@@ -398,10 +427,12 @@ function AssetThumb({
   asset,
   onDelete,
   onPreview,
+  onTypeChange,
 }: {
   asset: Asset;
   onDelete: () => void;
   onPreview: () => void;
+  onTypeChange: (type: AssetType) => void;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [hover, setHover] = useState(false);
@@ -487,6 +518,34 @@ function AssetThumb({
       >
         {asset.name}
       </div>
+      <select
+        value={asset.type}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          e.stopPropagation();
+          onTypeChange(e.target.value as AssetType);
+        }}
+        title="Asset type — controls by-type export folder"
+        style={{
+          position: 'absolute',
+          top: 4,
+          left: 4,
+          background: 'rgba(0,0,0,0.75)',
+          color: theme.text,
+          border: `1px solid ${theme.border}`,
+          borderRadius: theme.radius,
+          padding: '1px 3px',
+          fontSize: 9,
+          maxWidth: 'calc(100% - 32px)',
+          cursor: 'pointer',
+        }}
+      >
+        {ASSET_TYPES.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { extractTileKey } from './mj-scrape';
-import type { Asset, Collection, CropRect, MJMetadata, Outfit, StagingImage } from './types';
+import type { Asset, AssetType, Collection, CropRect, MJMetadata, Outfit, StagingImage } from './types';
 
 export const DB_NAME = 'designworkflow';
 export const DB_VERSION = 1;
@@ -186,10 +186,60 @@ export async function getStaging(id: string): Promise<StagingImage | undefined> 
   return db.get('staging', id);
 }
 
+function normalizeAsset(a: Asset): Asset {
+  return a.type ? a : { ...a, type: 'other' };
+}
+
 export async function getAssetsForOutfit(outfitId: string): Promise<Asset[]> {
   const db = await getDb();
   const all = await db.getAllFromIndex('assets', 'by-outfit', outfitId);
-  return all.sort((a, b) => a.createdAt - b.createdAt);
+  return all.sort((a, b) => a.createdAt - b.createdAt).map(normalizeAsset);
+}
+
+export interface AssetWithOutfit {
+  asset: Asset;
+  outfitId: string;
+  outfitName: string;
+  outfitLowRes: boolean;
+}
+
+export async function getAssetsForCollection(collectionId: string): Promise<AssetWithOutfit[]> {
+  const outfits = await getOutfitsForCollection(collectionId);
+  const results: AssetWithOutfit[] = [];
+  for (const outfit of outfits) {
+    const assets = await getAssetsForOutfit(outfit.id);
+    for (const asset of assets) {
+      results.push({
+        asset,
+        outfitId: outfit.id,
+        outfitName: outfit.name,
+        outfitLowRes: outfit.metadata.lowResolution,
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Move an outfit back to staging: duplicate the source blob into a fresh
+ * staging entry, then delete the outfit (and its assets). Metadata preserved.
+ */
+export async function sendOutfitToStaging(outfitId: string): Promise<StagingImage | null> {
+  const db = await getDb();
+  const outfit = await db.get('outfits', outfitId);
+  if (!outfit) return null;
+  const sourceBlob = await db.get('blobs', outfit.sourceImageBlobId);
+  if (!sourceBlob) return null;
+  const staging = await addStagingImage(outfit.collectionId, sourceBlob, outfit.metadata);
+  await deleteOutfit(outfitId);
+  return staging;
+}
+
+export async function updateAssetType(assetId: string, type: AssetType): Promise<void> {
+  const db = await getDb();
+  const existing = await db.get('assets', assetId);
+  if (!existing) return;
+  await db.put('assets', { ...existing, type });
 }
 
 export async function getOutfit(id: string): Promise<Outfit | undefined> {
@@ -284,6 +334,7 @@ export async function replaceOutfitAssets(
     createdAt: now,
     crop: c.crop,
     blobId: crypto.randomUUID(),
+    type: c.type ?? 'other',
   }));
   for (let i = 0; i < newAssets.length; i++) {
     await tx.objectStore('blobs').put(crops[i].blob, newAssets[i].blobId);
@@ -300,6 +351,7 @@ export interface CropInput {
   name: string;
   crop: CropRect;
   blob: Blob;
+  type?: AssetType;
 }
 
 /**
@@ -324,6 +376,7 @@ export async function createOutfitWithAssets(
     createdAt: Date.now(),
     crop: c.crop,
     blobId: crypto.randomUUID(),
+    type: c.type ?? 'other',
   }));
   const outfit: Outfit = {
     id: outfitId,

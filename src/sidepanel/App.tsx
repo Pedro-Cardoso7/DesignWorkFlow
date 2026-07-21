@@ -1,7 +1,7 @@
+import { AssetsByType } from './components/AssetsByType';
 import { ErrorTray } from './components/ErrorTray';
 import { Header } from './components/Header';
 import { LayoutBanner } from './components/LayoutBanner';
-import { OutfitList } from './components/OutfitList';
 import { OutfitDetail } from './components/OutfitDetail';
 import { StagingArea } from './components/StagingArea';
 import { ExportBar } from './components/ExportBar';
@@ -50,12 +50,18 @@ export function App() {
               onDeleteAsset={(assetId) => state.deleteAsset(assetId)}
               onRestoreAsset={(asset, blob) => state.restoreAsset(asset, blob)}
               onRename={(name) => state.renameOutfit(selectedOutfit.id, name)}
+              onUpdateAssetType={(id, type) => state.updateAssetType(id, type)}
+              onSendToStaging={() => state.sendOutfitToStaging(selectedOutfit.id)}
               refreshKey={state.outfitRefreshKey}
             />
           ) : (
             <>
               <StagingArea images={state.staging} onChanged={state.reload} />
-              <OutfitList outfits={state.outfits} onOpen={state.selectOutfit} onRename={state.renameOutfit} />
+              <AssetsByType
+                assets={state.assetsFlat}
+                onOpenOutfit={state.selectOutfit}
+                onUpdateAssetType={state.updateAssetType}
+              />
             </>
           )
         ) : (

@@ -1,12 +1,16 @@
 import JSZip from 'jszip';
 import { buildCollectionTree } from './collection-tree';
 import { getCollection } from './db';
+import type { ExportMode } from './manifest';
 
-export async function exportCollectionZip(collectionId: string): Promise<void> {
+export async function exportCollectionZip(
+  collectionId: string,
+  mode: ExportMode = 'by-outfit',
+): Promise<void> {
   const collection = await getCollection(collectionId);
   if (!collection) throw new Error(`Collection ${collectionId} not found`);
 
-  const tree = await buildCollectionTree(collection);
+  const tree = await buildCollectionTree(collection, mode);
   const zip = new JSZip();
   for (const file of tree.files) {
     zip.file(file.path, file.blob);
@@ -17,7 +21,8 @@ export async function exportCollectionZip(collectionId: string): Promise<void> {
   try {
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${tree.rootFolder}.zip`;
+    const suffix = mode === 'by-type' ? '-by-type' : '';
+    a.download = `${tree.rootFolder}${suffix}.zip`;
     document.body.appendChild(a);
     a.click();
     a.remove();

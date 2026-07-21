@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Asset, Collection, Outfit, StagingImage } from '../../shared/types';
+import type { Asset, AssetType, Collection, Outfit, StagingImage } from '../../shared/types';
 import type { ExtensionMessage } from '../../shared/messages';
 import {
   createCollection as dbCreateCollection,
@@ -9,11 +9,15 @@ import {
   renameCollection as dbRenameCollection,
   renameOutfit as dbRenameOutfit,
   restoreAsset as dbRestoreAsset,
+  sendOutfitToStaging as dbSendOutfitToStaging,
+  updateAssetType as dbUpdateAssetType,
   getActiveCollectionId,
   getAllCollections,
+  getAssetsForCollection,
   getOutfitsForCollection,
   getStagingForCollection,
   setActiveCollectionId,
+  type AssetWithOutfit,
 } from '../../shared/db';
 
 export interface AppStateSnapshot {
@@ -22,6 +26,7 @@ export interface AppStateSnapshot {
   activeCollection: Collection | null;
   staging: StagingImage[];
   outfits: Outfit[];
+  assetsFlat: AssetWithOutfit[];
   selectedOutfitId: string | null;
   outfitRefreshKey: number;
 }
@@ -37,6 +42,8 @@ export interface AppStateActions {
   renameOutfit: (id: string, name: string) => Promise<void>;
   deleteAsset: (id: string) => Promise<{ asset: Asset; blob: Blob } | null>;
   restoreAsset: (asset: Asset, blob: Blob) => Promise<void>;
+  updateAssetType: (id: string, type: AssetType) => Promise<void>;
+  sendOutfitToStaging: (outfitId: string) => Promise<void>;
 }
 
 export function useAppState(): AppStateSnapshot & AppStateActions {
@@ -45,6 +52,7 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [staging, setStaging] = useState<StagingImage[]>([]);
   const [outfits, setOutfits] = useState<Outfit[]>([]);
+  const [assetsFlat, setAssetsFlat] = useState<AssetWithOutfit[]>([]);
   const [selectedOutfitId, setSelectedOutfitId] = useState<string | null>(null);
   const [outfitRefreshKey, setOutfitRefreshKey] = useState(0);
 
@@ -56,13 +64,18 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
       active = all[0].id;
       await setActiveCollectionId(active);
     }
-    const [nextStaging, nextOutfits] = active
-      ? await Promise.all([getStagingForCollection(active), getOutfitsForCollection(active)])
-      : [[], []];
+    const [nextStaging, nextOutfits, nextAssets] = active
+      ? await Promise.all([
+          getStagingForCollection(active),
+          getOutfitsForCollection(active),
+          getAssetsForCollection(active),
+        ])
+      : [[], [], []];
     setCollections(all);
     setActiveId(active);
     setStaging(nextStaging);
     setOutfits(nextOutfits);
+    setAssetsFlat(nextAssets);
     setLoading(false);
   }, []);
 
@@ -161,12 +174,33 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     [reload],
   );
 
+  const sendOutfitToStaging = useCallback(
+    async (outfitId: string) => {
+      await dbSendOutfitToStaging(outfitId);
+      if (selectedOutfitId === outfitId) setSelectedOutfitId(null);
+      await reload();
+    },
+    [reload, selectedOutfitId],
+  );
+
+  const updateAssetType = useCallback(
+    async (id: string, type: AssetType) => {
+      await dbUpdateAssetType(id, type);
+      setAssetsFlat((prev) =>
+        prev.map((a) => (a.asset.id === id ? { ...a, asset: { ...a.asset, type } } : a)),
+      );
+      setOutfitRefreshKey((k) => k + 1);
+    },
+    [],
+  );
+
   return {
     loading,
     collections,
     activeCollection,
     staging,
     outfits,
+    assetsFlat,
     selectedOutfitId,
     outfitRefreshKey,
     reload,
@@ -179,5 +213,7 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     renameOutfit,
     deleteAsset,
     restoreAsset,
+    updateAssetType,
+    sendOutfitToStaging,
   };
 }

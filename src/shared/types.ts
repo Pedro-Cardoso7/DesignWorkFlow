@@ -15,6 +15,18 @@ export interface Outfit {
   metadata: MJMetadata;
 }
 
+export const ASSET_TYPES = [
+  'outfit',
+  'head',
+  'makeup',
+  'torso',
+  'pants',
+  'shoes',
+  'accessories',
+  'other',
+] as const;
+export type AssetType = (typeof ASSET_TYPES)[number];
+
 export interface Asset {
   id: string;
   outfitId: string;
@@ -22,6 +34,19 @@ export interface Asset {
   createdAt: number;
   crop: CropRect;
   blobId: string;
+  type: AssetType;
+}
+
+export function inferAssetTypeFromName(name: string): AssetType {
+  const n = name.trim().toLowerCase();
+  if (n.startsWith('head')) return 'head';
+  if (n.startsWith('makeup') || n.startsWith('make-up') || n.startsWith('make up')) return 'makeup';
+  if (n.startsWith('top') || n.startsWith('torso') || n.startsWith('shirt') || n.startsWith('jacket')) return 'torso';
+  if (n.startsWith('bottom') || n.startsWith('pants') || n.startsWith('skirt') || n.startsWith('trousers')) return 'pants';
+  if (n.startsWith('shoe') || n.startsWith('boot') || n.startsWith('footwear')) return 'shoes';
+  if (n.startsWith('accessor') || n.startsWith('bag') || n.startsWith('hat') || n.startsWith('belt') || n.startsWith('jewel')) return 'accessories';
+  if (n.startsWith('outfit') || n.startsWith('full') || n === 'body') return 'outfit';
+  return 'other';
 }
 
 export interface StagingImage {

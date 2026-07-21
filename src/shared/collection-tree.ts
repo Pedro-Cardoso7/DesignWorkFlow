@@ -1,5 +1,6 @@
-import { getAssetsForOutfit, getBlob, getOutfitsForCollection } from './db';
-import { buildManifest, sanitizeName } from './manifest';
+import { getAssetsForOutfit, getBlob, getOutfitsForCollection, getStagingForCollection } from './db';
+import { buildManifest, sanitizeName, stagingManifestEntry, type ExportMode, type StagingManifestEntry } from './manifest';
+import { deriveOutfitNameFromStaging } from './naming';
 import type { Asset, Collection } from './types';
 
 export interface TreeFile {
@@ -13,19 +14,24 @@ export interface CollectionTree {
 }
 
 /**
- * Materialize a collection into its FR-EX-2 file tree — manifest.json plus
- * one folder per outfit containing outfit.png and asset-N.png files.
- * Outfit folder names are disambiguated if sanitization causes collisions.
+ * Materialize a collection into its export file tree. Two shapes:
+ * - by-outfit (default): <root>/<outfit>/outfit.png + asset-N.png files
+ * - by-type: <root>/sources/<outfit>.png (flat) + <type>/<outfit>__<asset>.png
+ *   Source folder is `sources/` not `outfits/` to avoid colliding with the `outfit` asset type folder.
+ * Both modes include a `staging/` folder with any un-cropped staging images.
  */
-export async function buildCollectionTree(collection: Collection): Promise<CollectionTree> {
+export async function buildCollectionTree(
+  collection: Collection,
+  mode: ExportMode = 'by-outfit',
+): Promise<CollectionTree> {
   const outfits = await getOutfitsForCollection(collection.id);
   const assetsByOutfit = new Map<string, Asset[]>();
   for (const outfit of outfits) {
     assetsByOutfit.set(outfit.id, await getAssetsForOutfit(outfit.id));
   }
+  const staging = await getStagingForCollection(collection.id);
 
   const rootFolder = sanitizeName(collection.name);
-  const files: TreeFile[] = [];
 
   const usedFolders = new Set<string>();
   const outfitFolders = new Map<string, string>();
@@ -40,29 +46,118 @@ export async function buildCollectionTree(collection: Collection): Promise<Colle
     outfitFolders.set(outfit.id, folder);
   }
 
-  const manifest = buildManifest(
-    collection,
-    outfits.map((o) => ({ ...o, name: outfitFolders.get(o.id)! })),
-    assetsByOutfit,
-  );
-  files.push({
-    path: `${rootFolder}/manifest.json`,
-    blob: new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }),
-  });
-
-  for (const outfit of outfits) {
-    const folder = outfitFolders.get(outfit.id)!;
-    const sourceBlob = await getBlob(outfit.sourceImageBlobId);
-    if (sourceBlob) {
-      files.push({ path: `${rootFolder}/${folder}/outfit.png`, blob: sourceBlob });
+  // Staging file names — dedupe within staging/ folder
+  const stagingFileNames = new Map<string, string>();
+  const usedStagingNames = new Set<string>();
+  for (const s of staging) {
+    const base = sanitizeName(deriveOutfitNameFromStaging(s));
+    let name = `${base}.png`;
+    let n = 2;
+    while (usedStagingNames.has(name.toLowerCase())) {
+      name = `${base} (${n++}).png`;
     }
-    const assets = assetsByOutfit.get(outfit.id) ?? [];
-    for (let i = 0; i < assets.length; i++) {
-      const blob = await getBlob(assets[i].blobId);
-      if (blob) {
-        files.push({ path: `${rootFolder}/${folder}/asset-${i + 1}.png`, blob });
+    usedStagingNames.add(name.toLowerCase());
+    stagingFileNames.set(s.id, name);
+  }
+
+  const files: TreeFile[] = [];
+
+  const stagingManifest: StagingManifestEntry[] = staging.map((s) =>
+    stagingManifestEntry(`staging/${stagingFileNames.get(s.id)!}`, s.addedAt, s.metadata),
+  );
+
+  if (mode === 'by-outfit') {
+    const manifest = buildManifest(
+      collection,
+      outfits.map((o) => ({ ...o, name: outfitFolders.get(o.id)! })),
+      assetsByOutfit,
+      mode,
+      {
+        folder: (o) => outfitFolders.get(o.id)!,
+        sourceFile: () => 'outfit.png',
+        assetFile: (_o, _a, i) => `asset-${i + 1}.png`,
+      },
+    );
+    manifest.staging = stagingManifest;
+    files.push({
+      path: `${rootFolder}/manifest.json`,
+      blob: new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }),
+    });
+
+    for (const outfit of outfits) {
+      const folder = outfitFolders.get(outfit.id)!;
+      const sourceBlob = await getBlob(outfit.sourceImageBlobId);
+      if (sourceBlob) {
+        files.push({ path: `${rootFolder}/${folder}/outfit.png`, blob: sourceBlob });
+      }
+      const assets = assetsByOutfit.get(outfit.id) ?? [];
+      for (let i = 0; i < assets.length; i++) {
+        const blob = await getBlob(assets[i].blobId);
+        if (blob) {
+          files.push({ path: `${rootFolder}/${folder}/asset-${i + 1}.png`, blob });
+        }
       }
     }
+  } else {
+    const assetFileNames = new Map<string, string>();
+    const usedByType = new Map<string, Set<string>>();
+    for (const outfit of outfits) {
+      const outfitFolder = outfitFolders.get(outfit.id)!;
+      const assets = assetsByOutfit.get(outfit.id) ?? [];
+      for (const asset of assets) {
+        const type = asset.type;
+        const used = usedByType.get(type) ?? new Set<string>();
+        const base = `${outfitFolder}__${sanitizeName(asset.name)}`;
+        let name = `${base}.png`;
+        let n = 2;
+        while (used.has(name.toLowerCase())) {
+          name = `${base} (${n++}).png`;
+        }
+        used.add(name.toLowerCase());
+        usedByType.set(type, used);
+        assetFileNames.set(asset.id, `${type}/${name}`);
+      }
+    }
+
+    const manifest = buildManifest(
+      collection,
+      outfits.map((o) => ({ ...o, name: outfitFolders.get(o.id)! })),
+      assetsByOutfit,
+      mode,
+      {
+        folder: () => 'sources',
+        sourceFile: (o) => `sources/${outfitFolders.get(o.id)!}.png`,
+        assetFile: (_o, a) => assetFileNames.get(a.id) ?? `other/${a.id}.png`,
+      },
+    );
+    manifest.staging = stagingManifest;
+    files.push({
+      path: `${rootFolder}/manifest.json`,
+      blob: new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }),
+    });
+
+    for (const outfit of outfits) {
+      const folder = outfitFolders.get(outfit.id)!;
+      const sourceBlob = await getBlob(outfit.sourceImageBlobId);
+      if (sourceBlob) {
+        files.push({ path: `${rootFolder}/sources/${folder}.png`, blob: sourceBlob });
+      }
+      const assets = assetsByOutfit.get(outfit.id) ?? [];
+      for (const asset of assets) {
+        const rel = assetFileNames.get(asset.id);
+        if (!rel) continue;
+        const blob = await getBlob(asset.blobId);
+        if (blob) files.push({ path: `${rootFolder}/${rel}`, blob });
+      }
+    }
+  }
+
+  // Staging images — same folder in both modes
+  for (const s of staging) {
+    const name = stagingFileNames.get(s.id);
+    if (!name) continue;
+    const blob = await getBlob(s.blobId);
+    if (blob) files.push({ path: `${rootFolder}/staging/${name}`, blob });
   }
 
   return { rootFolder, files };

@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { ExtensionMessage } from '../shared/messages';
-import type { CropRect, MJMetadata, Outfit, StagingImage } from '../shared/types';
+import type { AssetType, CropRect, MJMetadata, Outfit, StagingImage } from '../shared/types';
+import { ASSET_TYPES, inferAssetTypeFromName } from '../shared/types';
+import { deriveOutfitNameFromStaging } from '../shared/naming';
 import {
   createOutfitWithAssets,
   getAssetsForOutfit,
@@ -15,6 +17,7 @@ interface Region {
   id: string;
   name: string;
   rect: CropRect;
+  type: AssetType;
 }
 
 const bg = '#151515';
@@ -172,7 +175,7 @@ export function App() {
         sourceBlobId = s.blobId;
         setMode({ kind: 'create', staging: s });
         setSourceMetadata(s.metadata);
-        setOutfitName(deriveDefaultName(s));
+        setOutfitName(deriveOutfitNameFromStaging(s));
       } else {
         const outfit = await getOutfit(outfitId!);
         if (!outfit) {
@@ -186,7 +189,12 @@ export function App() {
         const existing = await getAssetsForOutfit(outfit.id);
         if (!cancelled) {
           setRegions(
-            existing.map((a) => ({ id: crypto.randomUUID(), name: a.name, rect: a.crop })),
+            existing.map((a) => ({
+              id: crypto.randomUUID(),
+              name: a.name,
+              rect: a.crop,
+              type: a.type ?? inferAssetTypeFromName(a.name),
+            })),
           );
         }
       }
@@ -222,12 +230,25 @@ export function App() {
     if (rect.width < 4 || rect.height < 4) return;
     setRegions((prev) => {
       pushHistory(prev);
-      return [...prev, { id: crypto.randomUUID(), name: `Region ${prev.length + 1}`, rect }];
+      const name = `Region ${prev.length + 1}`;
+      return [
+        ...prev,
+        { id: crypto.randomUUID(), name, rect, type: inferAssetTypeFromName(name) },
+      ];
     });
   };
 
   const renameRegion = (id: string, name: string) =>
-    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, name } : r)));
+    setRegions((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r;
+        const wasInferred = r.type === inferAssetTypeFromName(r.name);
+        return { ...r, name, type: wasInferred ? inferAssetTypeFromName(name) : r.type };
+      }),
+    );
+
+  const setRegionType = (id: string, type: AssetType) =>
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, type } : r)));
 
   const deleteRegion = (id: string) =>
     setRegions((prev) => {
@@ -269,7 +290,7 @@ export function App() {
       const crops: CropInput[] = [];
       for (const region of regions) {
         const blob = await cropBlob(image, region.rect);
-        crops.push({ name: region.name, crop: region.rect, blob });
+        crops.push({ name: region.name, crop: region.rect, blob, type: region.type });
       }
       if (mode.kind === 'create') {
         const sourceBlob = await getBlob(mode.staging.blobId);
@@ -577,22 +598,47 @@ export function App() {
               Click and drag on the image to add a region.
             </div>
           ) : (
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {regions.map((r, i) => (
-                <li key={r.id} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ color: muted, fontSize: 11, width: 16 }}>{i + 1}</span>
-                  <input
-                    value={r.name}
-                    onChange={(e) => renameRegion(r.id, e.target.value)}
-                    style={{ flex: 1, background: bg, color: text, border: `1px solid ${border}`, borderRadius: 4, padding: '4px 8px', fontSize: 12 }}
-                  />
-                  <button
-                    onClick={() => deleteRegion(r.id)}
-                    style={{ background: 'transparent', color: muted, border: 'none', cursor: 'pointer', fontSize: 14, padding: '2px 6px' }}
-                    title="Delete region"
+                <li
+                  key={r.id}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
+                >
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span style={{ color: muted, fontSize: 11, width: 16 }}>{i + 1}</span>
+                    <input
+                      value={r.name}
+                      onChange={(e) => renameRegion(r.id, e.target.value)}
+                      style={{ flex: 1, background: bg, color: text, border: `1px solid ${border}`, borderRadius: 4, padding: '4px 8px', fontSize: 12 }}
+                    />
+                    <button
+                      onClick={() => deleteRegion(r.id)}
+                      style={{ background: 'transparent', color: muted, border: 'none', cursor: 'pointer', fontSize: 14, padding: '2px 6px' }}
+                      title="Delete region"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <select
+                    value={r.type}
+                    onChange={(e) => setRegionType(r.id, e.target.value as AssetType)}
+                    title="Asset type — controls by-type export folder"
+                    style={{
+                      marginLeft: 20,
+                      background: bg,
+                      color: text,
+                      border: `1px solid ${border}`,
+                      borderRadius: 4,
+                      padding: '3px 6px',
+                      fontSize: 11,
+                    }}
                   >
-                    ×
-                  </button>
+                    {ASSET_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
                 </li>
               ))}
             </ul>
@@ -1028,27 +1074,62 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
         const right = initial.x + initial.width;
         const bottom = initial.y + initial.height;
         const minSize = 4 / scale;
-        let newX = initial.x;
-        let newY = initial.y;
-        let newW = initial.width;
-        let newH = initial.height;
-        if (handle === 'nw' || handle === 'sw') {
-          newX = Math.min(imgX, right - minSize);
-          newX = Math.max(0, newX);
-          newW = right - newX;
+        const anchorX = handle === 'ne' || handle === 'se' ? initial.x : right;
+        const anchorY = handle === 'sw' || handle === 'se' ? initial.y : bottom;
+        const leftSide = handle === 'nw' || handle === 'sw';
+        const topSide = handle === 'nw' || handle === 'ne';
+
+        let w = Math.max(minSize, Math.abs(imgX - anchorX));
+        let h = Math.max(minSize, Math.abs(imgY - anchorY));
+
+        if (aspect != null) {
+          if (w / h > aspect) h = w / aspect;
+          else w = h * aspect;
         }
-        if (handle === 'ne' || handle === 'se') {
-          newW = Math.max(minSize, Math.min(image.width, imgX) - initial.x);
-        }
-        if (handle === 'nw' || handle === 'ne') {
-          newY = Math.min(imgY, bottom - minSize);
-          newY = Math.max(0, newY);
-          newH = bottom - newY;
-        }
-        if (handle === 'sw' || handle === 'se') {
-          newH = Math.max(minSize, Math.min(image.height, imgY) - initial.y);
-        }
-        onResize(resize.id, { x: newX, y: newY, width: newW, height: newH });
+
+        // Position top-left from anchor + dimensions
+        let newX = leftSide ? anchorX - w : anchorX;
+        let newY = topSide ? anchorY - h : anchorY;
+
+        // Clamp to image bounds, keep anchor fixed; when aspect is set, shrink both dims together
+        const clampToBounds = () => {
+          if (newX < 0) {
+            w += newX;
+            newX = 0;
+            if (aspect != null) {
+              h = w / aspect;
+              newY = topSide ? anchorY - h : anchorY;
+            }
+          }
+          if (newY < 0) {
+            h += newY;
+            newY = 0;
+            if (aspect != null) {
+              w = h * aspect;
+              newX = leftSide ? anchorX - w : anchorX;
+            }
+          }
+          if (newX + w > image.width) {
+            w = image.width - newX;
+            if (aspect != null) {
+              h = w / aspect;
+              newY = topSide ? anchorY - h : anchorY;
+            }
+          }
+          if (newY + h > image.height) {
+            h = image.height - newY;
+            if (aspect != null) {
+              w = h * aspect;
+              newX = leftSide ? anchorX - w : anchorX;
+            }
+          }
+        };
+        clampToBounds();
+        clampToBounds();
+
+        w = Math.max(minSize, w);
+        h = Math.max(minSize, h);
+        onResize(resize.id, { x: newX, y: newY, width: w, height: h });
       } else if (move) {
         const nxDisp = Math.max(0, Math.min(dispW - move.width, x - move.grabDX));
         const nyDisp = Math.max(0, Math.min(dispH - move.height, y - move.grabDY));
@@ -1065,7 +1146,7 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
       window.removeEventListener('mousemove', onWinMove);
       window.removeEventListener('mouseup', onWinUp);
     };
-  }, [resize, move, scale, dispW, dispH, image, onMove, onResize]);
+  }, [resize, move, scale, dispW, dispH, image, aspect, onMove, onResize]);
 
   const hitTest = (x: number, y: number): Region | null => {
     for (let i = regions.length - 1; i >= 0; i--) {
@@ -1257,6 +1338,7 @@ function buildDefaultOutfitRegions(imgW: number, imgH: number): Region[] {
         width: side,
         height: side,
       },
+      type: inferAssetTypeFromName(b.name),
     };
   });
 }
@@ -1269,6 +1351,7 @@ interface SavedDefault {
   yFrac: number;
   wFrac: number;
   hFrac: number;
+  type?: AssetType;
 }
 
 async function loadSavedDefaults(): Promise<SavedDefault[] | null> {
@@ -1291,6 +1374,7 @@ function fromSavedDefaults(saved: SavedDefault[], imgW: number, imgH: number): R
       width: Math.max(1, Math.min(imgW, s.wFrac * imgW)),
       height: Math.max(1, Math.min(imgH, s.hFrac * imgH)),
     },
+    type: s.type ?? inferAssetTypeFromName(s.name),
   }));
 }
 
@@ -1301,6 +1385,7 @@ async function saveCurrentAsDefaults(regions: Region[], imgW: number, imgH: numb
     yFrac: r.rect.y / imgH,
     wFrac: r.rect.width / imgW,
     hFrac: r.rect.height / imgH,
+    type: r.type,
   }));
   await chrome.storage.local.set({ [CROP_DEFAULTS_KEY]: toSave });
 }
@@ -1338,7 +1423,14 @@ async function loadDraft(key: string): Promise<Draft | null> {
     const res = await chrome.storage.session.get(full);
     const val = res[full];
     if (!val || !Array.isArray(val.regions)) return null;
-    return val as Draft;
+    const draft = val as Draft;
+    return {
+      ...draft,
+      regions: draft.regions.map((r) => ({
+        ...r,
+        type: r.type ?? inferAssetTypeFromName(r.name),
+      })),
+    };
   } catch {
     return null;
   }
@@ -1352,15 +1444,6 @@ async function saveDraft(key: string, draft: Draft) {
 async function clearDraft(key: string) {
   const full = DRAFT_KEY_PREFIX + key;
   await chrome.storage.session.remove(full);
-}
-
-function deriveDefaultName(s: StagingImage): string {
-  if (s.metadata.prompt) {
-    const first = s.metadata.prompt.split(/[,.\-\n]/)[0].trim();
-    if (first.length >= 3 && first.length <= 40) return first;
-  }
-  const d = new Date(s.addedAt);
-  return `Outfit ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 async function cropBlob(image: HTMLImageElement, rect: CropRect): Promise<Blob> {
