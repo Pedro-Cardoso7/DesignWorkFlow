@@ -1,4 +1,6 @@
+import { ErrorTray } from './components/ErrorTray';
 import { Header } from './components/Header';
+import { LayoutBanner } from './components/LayoutBanner';
 import { OutfitList } from './components/OutfitList';
 import { OutfitDetail } from './components/OutfitDetail';
 import { StagingArea } from './components/StagingArea';
@@ -25,6 +27,7 @@ export function App() {
         flexDirection: 'column',
       }}
     >
+      <LayoutBanner />
       <Header
         collections={state.collections}
         activeCollection={state.activeCollection}
@@ -60,6 +63,7 @@ export function App() {
         )}
       </div>
 
+      <ErrorTray />
       <ExportBar activeCollectionId={state.activeCollection?.id ?? null} />
     </div>
   );

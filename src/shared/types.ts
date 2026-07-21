@@ -50,5 +50,11 @@ export interface CropRect {
 
 export interface AppState {
   activeCollectionId: string | null;
-  syncDirectoryHandleId: string | null;
+}
+
+export interface CaptureError {
+  id: string;
+  url: string | null;
+  error: string;
+  at: number;
 }

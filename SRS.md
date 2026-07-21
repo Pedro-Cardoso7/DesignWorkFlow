@@ -14,7 +14,7 @@
 This document specifies the requirements for a Chrome extension that streamlines a fashion designer's workflow of collecting Midjourney-generated outfit renders, decomposing them into individual asset crops (tops, pants, shoes, accessories, hair, makeup, etc.), and organizing them into structured collections ready for downstream design use.
 
 ### 1.2 Scope
-The extension augments the Midjourney web application (`midjourney.com`) with an in-page selection mechanism and a persistent side-panel workspace where the user assembles collections of outfits, each composed of cropped assets extracted from Midjourney source images. The workspace continuously mirrors to a user-designated local folder, producing a browsable file tree that doubles as the deliverable.
+The extension augments the Midjourney web application (`midjourney.com`) with an in-page selection mechanism and a persistent side-panel workspace where the user assembles collections of outfits, each composed of cropped assets extracted from Midjourney source images. Collections are persisted locally and exported on demand as a ZIP archive.
 
 The MVP is a **personal-use tool** for a single designer, installed via Chrome developer mode. It is not published to the Chrome Web Store.
 
@@ -33,7 +33,6 @@ The MVP is a **personal-use tool** for a single designer, installed via Chrome d
 - Midjourney web app: `midjourney.com` (own creations page)
 - Chrome Extensions Manifest V3
 - Chrome Side Panel API
-- File System Access API (`showDirectoryPicker`)
 - IndexedDB
 
 ### 1.5 Overview
@@ -49,7 +48,7 @@ The extension is a Chrome Manifest V3 add-on with three surfaces:
 2. **Side panel** — persistent workspace showing the active collection, staging area, and outfits.
 3. **Modal** — full-canvas cropping surface, opened from the side panel.
 
-State is persisted in **IndexedDB** and continuously mirrored to a **user-selected local folder** via the File System Access API. The sync folder is the primary deliverable — it mirrors the download ZIP structure exactly, so no explicit export step is required for most use.
+State is persisted in **IndexedDB**. The user exports a collection as a ZIP archive on demand; the ZIP is the primary deliverable.
 
 ### 2.2 Product Functions (Summary)
 - Add MJ-generated images to a per-collection staging area with one click
@@ -57,7 +56,6 @@ State is persisted in **IndexedDB** and continuously mirrored to a **user-select
 - Open staged images in a cropping modal; draw multiple rectangular crop regions in a single session
 - Save each cropping session as an outfit (one source image + N assets)
 - Manage multiple collections; switch the "active" one via a side-panel dropdown
-- Continuously sync all state to a local folder as a browsable file tree
 - Export a collection as a ZIP archive on demand
 - Basic CRUD: delete collections/outfits/assets; add assets to existing outfits; rename collections
 
@@ -68,14 +66,13 @@ Single user: a fashion designer with an active Midjourney subscription who gener
 - **CON-1**: Midjourney has no public API. Integration relies on scraping the MJ web DOM, which may change without warning.
 - **CON-2**: Extraction and re-hosting of MJ-generated images may violate Midjourney's Terms of Service. Risk is accepted for personal use; extension shall not be publicly distributed.
 - **CON-3**: Chrome Manifest V3 restrictions apply (no persistent background pages; service workers only).
-- **CON-4**: File System Access API requires a modern Chromium-based browser and explicit user permission on first use.
-- **CON-5**: All data is local to a single browser profile. No cloud sync, no multi-device by default (though the user may point the sync folder at a Dropbox/iCloud folder to get sync for free).
+- **CON-4**: All data is local to a single browser profile. No cloud sync, no multi-device.
 
 ### 2.5 Assumptions and Dependencies
 - User runs the latest stable Chrome (or Chromium-based browser with equivalent APIs).
 - Midjourney web app remains reachable and structurally scrapeable at `midjourney.com`.
 - Midjourney continues to serve full-resolution image URLs from a public CDN reachable by the extension.
-- User has write access to their chosen sync folder and sufficient disk space (~2 GB per 100 outfits with full-res sources).
+- User has sufficient browser storage quota for the dataset (~2 GB per 100 outfits with full-res sources).
 
 ---
 
@@ -128,7 +125,7 @@ Single user: a fashion designer with an active Midjourney subscription who gener
 2. Rename control for the active collection
 3. Staging area — thumbnail list of images added but not yet cropped
 4. Outfit list — cards showing source thumbnail, prompt snippet, timestamp, and asset count
-5. Sync-folder status indicator + manual "Export ZIP" button
+5. Manual "Export ZIP" button
 
 **FR-SP-3** Clicking a staged image SHALL open it in the cropping modal.
 
@@ -168,17 +165,13 @@ Single user: a fashion designer with an active Midjourney subscription who gener
 
 **FR-CRUD-7** Rename of outfits and assets is NOT supported in MVP. Reorder of outfits and assets is NOT supported in MVP. Moving outfits between collections is NOT supported in MVP.
 
-#### 3.1.6 Storage & Sync
+#### 3.1.6 Storage
 
 **FR-ST-1** Internal state (collections, outfits, assets, images, metadata) SHALL be persisted in IndexedDB. Every mutation SHALL be persisted immediately.
 
-**FR-ST-2** On first run, the extension SHALL prompt the user (via File System Access API) to select a local sync folder. The chosen folder handle SHALL be persisted and reused across sessions.
+**FR-ST-2** All image blobs (source images and cropped assets) SHALL be stored as PNG in IndexedDB.
 
-**FR-ST-3** All state changes SHALL be mirrored to the sync folder using debounced writes.
-
-**FR-ST-4** The sync-folder structure SHALL exactly mirror the ZIP export structure defined in FR-EX-2.
-
-**FR-ST-5** The extension SHALL handle sync-folder write failures gracefully: retry with backoff, and surface a visible error state in the side panel if write access is lost.
+**FR-ST-3** Deleting a collection, outfit, or asset SHALL delete its associated blobs in the same transaction (no orphaned blobs).
 
 #### 3.1.7 Export
 
@@ -216,24 +209,23 @@ Single user: a fashion designer with an active Midjourney subscription who gener
 
 **NFR-PERF-3** The cropping modal SHALL render source images up to 4K resolution at 60 fps for pan and rectangle draw.
 
-**NFR-PERF-4** Sync-folder writes SHALL be debounced to at most one write batch per 2 seconds during rapid editing.
 
 #### 3.2.2 Scale
 **NFR-SCALE-1** The extension SHALL handle at least 20 collections, 500 outfits per collection, and 20 assets per outfit without perceptible UI degradation.
 
-**NFR-SCALE-2** The extension SHALL handle a total local dataset of at least 10 GB (IndexedDB + sync folder combined).
+**NFR-SCALE-2** The extension SHALL handle an IndexedDB dataset of at least 10 GB.
 
 #### 3.2.3 Robustness
 **NFR-ROB-1** Image capture SHALL never fail silently. Every failed capture SHALL be visible in the UI.
 
 **NFR-ROB-2** Metadata capture SHALL always fail silently, with missing fields recorded as `null`.
 
-**NFR-ROB-3** IndexedDB writes SHALL be transactional. A failed sync-folder write SHALL NOT roll back the IndexedDB state.
+**NFR-ROB-3** IndexedDB writes SHALL be transactional.
 
 **NFR-ROB-4** On MJ DOM changes that break selectors, the extension SHALL degrade gracefully (banner shown, previously-saved data unaffected).
 
 #### 3.2.4 Usability
-**NFR-USE-1** The workspace SHALL require zero configuration beyond the initial sync-folder pick.
+**NFR-USE-1** The workspace SHALL require zero configuration on first run.
 
 **NFR-USE-2** Destructive actions on collections and outfits SHALL require explicit confirmation. Destructive actions on individual assets SHALL NOT (cheap to redo).
 
@@ -241,7 +233,7 @@ Single user: a fashion designer with an active Midjourney subscription who gener
 **NFR-COMPAT-1** The extension SHALL target the latest stable Chrome (Manifest V3). Compatibility with other Chromium-based browsers (Edge, Brave) is desirable but not tested in MVP.
 
 #### 3.2.6 Security & Privacy
-**NFR-SEC-1** The extension SHALL request the minimum Chrome permissions required: content script access to `midjourney.com`, side panel, storage, and File System Access.
+**NFR-SEC-1** The extension SHALL request the minimum Chrome permissions required: content script access to `midjourney.com`, side panel, and storage.
 
 **NFR-SEC-2** No user data SHALL be transmitted off-device. There is no backend.
 
@@ -255,13 +247,9 @@ Single user: a fashion designer with an active Midjourney subscription who gener
 - **Read**: DOM structure of user's creations page (image tiles, prompt text, MJ parameters, job IDs, image URLs)
 - **Write**: None. The extension SHALL NOT modify MJ's own DOM state, submit prompts, or interact with MJ's server-side APIs.
 
-### 4.2 Local File System
-- **Read/Write**: The user-designated sync folder, via the File System Access API.
-
-### 4.3 Browser APIs
+### 4.2 Browser APIs
 - Chrome Manifest V3 (service worker, content script, side panel)
 - IndexedDB
-- File System Access API
 - Fetch API (for full-res image retrieval from MJ CDN)
 
 ---
@@ -282,4 +270,5 @@ The following are explicitly deferred beyond MVP scope. They are listed here to 
 - **Chrome Web Store distribution** — MVP is dev-mode install only.
 - **Batch or lasso selection** on the Midjourney page — MVP uses single-click add.
 - **AI-suggested crop regions** — MVP is fully manual rectangle drawing.
-- **Scheduled backups, backup nags, cloud backup providers** — the continuous sync folder is the backup story.
+- **Continuous sync to a local folder** — deferred; ZIP export is the interchange format.
+- **Scheduled backups, backup nags, cloud backup providers.**

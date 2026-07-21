@@ -154,6 +154,23 @@ function scan(root: ParentNode) {
 
 scan(document);
 
+// FR-MJ-9: probe once the page has settled. If MJ has rendered images but our
+// selectors match zero of them, the layout has shifted — tell the side panel.
+const LAYOUT_PROBE_DELAY_MS = 2500;
+const LAYOUT_PROBE_MIN_IMAGES = 4;
+setTimeout(() => {
+  const totalImgs = document.querySelectorAll('img').length;
+  const matched = findImageTiles(document).length;
+  if (totalImgs >= LAYOUT_PROBE_MIN_IMAGES && matched === 0) {
+    send({
+      type: 'LAYOUT_BROKEN',
+      reason: `No MJ image tiles matched (${totalImgs} <img> elements on page).`,
+    }).catch(() => {});
+  } else if (matched > 0) {
+    send({ type: 'LAYOUT_OK' }).catch(() => {});
+  }
+}, LAYOUT_PROBE_DELAY_MS);
+
 const observer = new MutationObserver((mutations) => {
   for (const m of mutations) {
     for (const node of Array.from(m.addedNodes)) {
