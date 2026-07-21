@@ -21,6 +21,9 @@ const SORT_LABELS: Record<SortKey, string> = {
 export function OutfitList({ outfits, onOpen, onRename }: OutfitListProps) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('date-desc');
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const cardRefs = useRef<Record<string, HTMLLIElement | null>>({});
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -40,6 +43,61 @@ export function OutfitList({ outfits, onOpen, onRename }: OutfitListProps) {
     });
     return sorted;
   }, [outfits, query, sort]);
+
+  useEffect(() => {
+    if (focusIndex == null) return;
+    if (filtered.length === 0) {
+      setFocusIndex(null);
+      return;
+    }
+    if (focusIndex >= filtered.length) setFocusIndex(filtered.length - 1);
+  }, [filtered, focusIndex]);
+
+  useEffect(() => {
+    const kbdStateRef = { filtered, focusIndex };
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const inField =
+        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+
+      if (e.key === '/' && !inField) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+
+      if (inField && t !== searchRef.current) return;
+
+      if (e.key === 'ArrowDown') {
+        if (kbdStateRef.filtered.length === 0) return;
+        e.preventDefault();
+        const next = kbdStateRef.focusIndex == null ? 0 : Math.min(kbdStateRef.filtered.length - 1, kbdStateRef.focusIndex + 1);
+        setFocusIndex(next);
+        const id = kbdStateRef.filtered[next]?.id;
+        if (id) cardRefs.current[id]?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        if (kbdStateRef.filtered.length === 0) return;
+        e.preventDefault();
+        const next = kbdStateRef.focusIndex == null ? 0 : Math.max(0, kbdStateRef.focusIndex - 1);
+        setFocusIndex(next);
+        const id = kbdStateRef.filtered[next]?.id;
+        if (id) cardRefs.current[id]?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (e.key === 'Enter' && kbdStateRef.focusIndex != null && !inField) {
+        const target = kbdStateRef.filtered[kbdStateRef.focusIndex];
+        if (target) {
+          e.preventDefault();
+          onOpen(target.id);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [filtered, focusIndex, onOpen]);
 
   return (
     <section style={{ padding: 12 }}>
@@ -63,9 +121,10 @@ export function OutfitList({ outfits, onOpen, onRename }: OutfitListProps) {
       {outfits.length > 0 && (
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name"
+            placeholder="Search by name (/)"
             style={{
               flex: 1,
               minWidth: 0,
@@ -145,12 +204,16 @@ export function OutfitList({ outfits, onOpen, onRename }: OutfitListProps) {
         </div>
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {filtered.map((outfit) => (
+          {filtered.map((outfit, i) => (
             <OutfitCard
               key={outfit.id}
               outfit={outfit}
+              focused={i === focusIndex}
               onOpen={() => onOpen(outfit.id)}
               onRename={(name) => onRename(outfit.id, name)}
+              cardRef={(el) => {
+                cardRefs.current[outfit.id] = el;
+              }}
             />
           ))}
         </ul>
@@ -163,10 +226,14 @@ function OutfitCard({
   outfit,
   onOpen,
   onRename,
+  focused = false,
+  cardRef,
 }: {
   outfit: Outfit;
   onOpen: () => void;
   onRename: (name: string) => Promise<void>;
+  focused?: boolean;
+  cardRef?: (el: HTMLLIElement | null) => void;
 }) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -230,11 +297,13 @@ function OutfitCard({
 
   return (
     <li
+      ref={cardRef}
       onClick={editing ? undefined : onOpen}
       style={{
         padding: 10,
         background: theme.panel,
-        border: `1px solid ${theme.border}`,
+        border: `1px solid ${focused ? '#7c5cff' : theme.border}`,
+        boxShadow: focused ? '0 0 0 1px #7c5cff' : undefined,
         borderRadius: theme.radius,
         fontSize: 13,
         cursor: editing ? 'default' : 'pointer',

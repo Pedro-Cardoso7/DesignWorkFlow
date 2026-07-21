@@ -17,10 +17,58 @@ interface PreviewTarget {
 
 export function StagingArea({ images, onChanged }: StagingAreaProps) {
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
+  const [clearing, setClearing] = useState(false);
+
+  const clearAll = async () => {
+    if (images.length === 0) return;
+    const ok = window.confirm(
+      `Remove all ${images.length} staged image${images.length === 1 ? '' : 's'}? This cannot be undone.`,
+    );
+    if (!ok) return;
+    setClearing(true);
+    try {
+      const collectionId = images[0].collectionId;
+      for (const img of images) {
+        await removeStagingImage(img.id);
+      }
+      chrome.runtime
+        .sendMessage({ type: 'STAGING_UPDATED', collectionId } satisfies ExtensionMessage)
+        .catch(() => {});
+      await onChanged();
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <section style={{ padding: 12, borderBottom: `1px solid ${theme.border}` }}>
-      <SectionTitle count={images.length}>Staging</SectionTitle>
+      <SectionTitle
+        count={images.length}
+        action={
+          images.length > 0 ? (
+            <button
+              onClick={clearAll}
+              disabled={clearing}
+              title="Remove all staged images"
+              style={{
+                background: 'transparent',
+                color: theme.textMuted,
+                border: `1px solid ${theme.border}`,
+                borderRadius: theme.radius,
+                padding: '2px 6px',
+                fontSize: 10,
+                cursor: clearing ? 'not-allowed' : 'pointer',
+                textTransform: 'none',
+                letterSpacing: 0,
+              }}
+            >
+              {clearing ? 'Clearing…' : 'Clear all'}
+            </button>
+          ) : null
+        }
+      >
+        Staging
+      </SectionTitle>
       {images.length === 0 ? (
         <Empty>Add images from midjourney.com — they'll queue here until you crop.</Empty>
       ) : (
@@ -164,7 +212,15 @@ function StagingThumb({
   );
 }
 
-function SectionTitle({ count, children }: { count: number; children: React.ReactNode }) {
+function SectionTitle({
+  count,
+  children,
+  action,
+}: {
+  count: number;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
   return (
     <div
       style={{
@@ -175,10 +231,15 @@ function SectionTitle({ count, children }: { count: number; children: React.Reac
         marginBottom: 8,
         display: 'flex',
         justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 6,
       }}
     >
       <span>{children}</span>
-      <span>{count}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {action}
+        <span>{count}</span>
+      </span>
     </div>
   );
 }

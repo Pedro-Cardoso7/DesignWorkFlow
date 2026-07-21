@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Collection, Outfit, StagingImage } from '../../shared/types';
+import type { Asset, Collection, Outfit, StagingImage } from '../../shared/types';
 import type { ExtensionMessage } from '../../shared/messages';
 import {
   createCollection as dbCreateCollection,
@@ -8,6 +8,7 @@ import {
   deleteOutfit as dbDeleteOutfit,
   renameCollection as dbRenameCollection,
   renameOutfit as dbRenameOutfit,
+  restoreAsset as dbRestoreAsset,
   getActiveCollectionId,
   getAllCollections,
   getOutfitsForCollection,
@@ -34,7 +35,8 @@ export interface AppStateActions {
   selectOutfit: (id: string | null) => void;
   deleteOutfit: (id: string) => Promise<void>;
   renameOutfit: (id: string, name: string) => Promise<void>;
-  deleteAsset: (id: string) => Promise<void>;
+  deleteAsset: (id: string) => Promise<{ asset: Asset; blob: Blob } | null>;
+  restoreAsset: (asset: Asset, blob: Blob) => Promise<void>;
 }
 
 export function useAppState(): AppStateSnapshot & AppStateActions {
@@ -142,7 +144,17 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
 
   const deleteAsset = useCallback(
     async (id: string) => {
-      await dbDeleteAsset(id);
+      const removed = await dbDeleteAsset(id);
+      setOutfitRefreshKey((k) => k + 1);
+      await reload();
+      return removed;
+    },
+    [reload],
+  );
+
+  const restoreAsset = useCallback(
+    async (asset: Asset, blob: Blob) => {
+      await dbRestoreAsset(asset, blob);
       setOutfitRefreshKey((k) => k + 1);
       await reload();
     },
@@ -166,5 +178,6 @@ export function useAppState(): AppStateSnapshot & AppStateActions {
     deleteOutfit,
     renameOutfit,
     deleteAsset,
+    restoreAsset,
   };
 }

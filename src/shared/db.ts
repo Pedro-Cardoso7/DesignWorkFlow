@@ -219,10 +219,13 @@ export async function deleteOutfit(outfitId: string): Promise<void> {
   await tx.done;
 }
 
-export async function deleteAsset(assetId: string): Promise<void> {
+export async function deleteAsset(
+  assetId: string,
+): Promise<{ asset: Asset; blob: Blob } | null> {
   const db = await getDb();
   const asset = await db.get('assets', assetId);
-  if (!asset) return;
+  if (!asset) return null;
+  const blob = await db.get('blobs', asset.blobId);
   const tx = db.transaction(['outfits', 'assets', 'blobs'], 'readwrite');
   await tx.objectStore('blobs').delete(asset.blobId);
   await tx.objectStore('assets').delete(assetId);
@@ -231,6 +234,22 @@ export async function deleteAsset(assetId: string): Promise<void> {
     await tx.objectStore('outfits').put({
       ...outfit,
       assetIds: outfit.assetIds.filter((id) => id !== assetId),
+    });
+  }
+  await tx.done;
+  return blob ? { asset, blob } : null;
+}
+
+export async function restoreAsset(asset: Asset, blob: Blob): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(['outfits', 'assets', 'blobs'], 'readwrite');
+  await tx.objectStore('blobs').put(blob, asset.blobId);
+  await tx.objectStore('assets').put(asset);
+  const outfit = await tx.objectStore('outfits').get(asset.outfitId);
+  if (outfit && !outfit.assetIds.includes(asset.id)) {
+    await tx.objectStore('outfits').put({
+      ...outfit,
+      assetIds: [...outfit.assetIds, asset.id],
     });
   }
   await tx.done;

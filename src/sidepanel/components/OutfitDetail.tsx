@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getAssetsForOutfit, getBlob } from '../../shared/db';
 import type { ExtensionMessage } from '../../shared/messages';
 import type { Asset, Outfit } from '../../shared/types';
@@ -14,14 +14,109 @@ interface Props {
   outfit: Outfit;
   onBack: () => void;
   onDeleteOutfit: () => void | Promise<void>;
-  onDeleteAsset: (assetId: string) => void | Promise<void>;
+  onDeleteAsset: (assetId: string) => Promise<{ asset: Asset; blob: Blob } | null>;
+  onRestoreAsset: (asset: Asset, blob: Blob) => Promise<void>;
+  onRename: (name: string) => Promise<void>;
   refreshKey: number;
 }
 
-export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, refreshKey }: Props) {
+const UNDO_TTL_MS = 6000;
+
+interface UndoState {
+  asset: Asset;
+  blob: Blob;
+  expiresAt: number;
+}
+
+export function OutfitDetail({
+  outfit,
+  onBack,
+  onDeleteOutfit,
+  onDeleteAsset,
+  onRestoreAsset,
+  onRename,
+  refreshKey,
+}: Props) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(outfit.name);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editingName) setNameDraft(outfit.name);
+  }, [outfit.name, editingName]);
+
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.select();
+  }, [editingName]);
+
+  const commitName = async () => {
+    const next = nameDraft.trim();
+    setEditingName(false);
+    if (next && next !== outfit.name) {
+      try {
+        await onRename(next);
+      } catch (err) {
+        console.error('[MJDW] rename outfit failed', err);
+        setNameDraft(outfit.name);
+      }
+    } else {
+      setNameDraft(outfit.name);
+    }
+  };
+
+  const cancelName = () => {
+    setNameDraft(outfit.name);
+    setEditingName(false);
+  };
+
+  const [promptCopyStatus, setPromptCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!undoState) return;
+    const tick = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(tick);
+  }, [undoState]);
+
+  useEffect(() => {
+    if (undoState && now >= undoState.expiresAt) setUndoState(null);
+  }, [now, undoState]);
+
+  const handleDeleteAsset = async (assetId: string) => {
+    const removed = await onDeleteAsset(assetId);
+    if (removed) {
+      setUndoState({ asset: removed.asset, blob: removed.blob, expiresAt: Date.now() + UNDO_TTL_MS });
+      setNow(Date.now());
+    }
+  };
+
+  const handleUndo = async () => {
+    if (!undoState) return;
+    const snap = undoState;
+    setUndoState(null);
+    try {
+      await onRestoreAsset(snap.asset, snap.blob);
+    } catch (err) {
+      console.error('[MJDW] restore asset failed', err);
+    }
+  };
+
+  const copyPrompt = async () => {
+    if (!outfit.metadata.prompt) return;
+    try {
+      await navigator.clipboard.writeText(outfit.metadata.prompt);
+      setPromptCopyStatus('copied');
+      setTimeout(() => setPromptCopyStatus('idle'), 1500);
+    } catch (err) {
+      console.error('[MJDW] copy prompt failed', err);
+      setPromptCopyStatus('error');
+      setTimeout(() => setPromptCopyStatus('idle'), 2000);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -63,9 +158,50 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
         <button style={buttonStyle('ghost')} onClick={onBack} title="Back to list">
           ← Back
         </button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {outfit.name}
-        </div>
+        {editingName ? (
+          <input
+            ref={nameInputRef}
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitName();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelName();
+              }
+            }}
+            onBlur={commitName}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: theme.input,
+              color: theme.text,
+              border: `1px solid ${theme.border}`,
+              borderRadius: theme.radius,
+              padding: '4px 8px',
+              fontSize: 13,
+              fontWeight: 500,
+            }}
+          />
+        ) : (
+          <div
+            onClick={() => setEditingName(true)}
+            title="Click to rename"
+            style={{
+              flex: 1,
+              fontSize: 13,
+              fontWeight: 500,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              cursor: 'text',
+            }}
+          >
+            {outfit.name}
+          </div>
+        )}
       </div>
 
       {outfit.metadata.lowResolution && (
@@ -112,20 +248,49 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
       )}
 
       {outfit.metadata.prompt && (
-        <div
-          style={{
-            fontSize: 11,
-            color: theme.textMuted,
-            lineHeight: 1.4,
-            maxHeight: 80,
-            overflow: 'auto',
-            padding: '6px 8px',
-            background: theme.panel,
-            border: `1px solid ${theme.border}`,
-            borderRadius: theme.radius,
-          }}
-        >
-          {outfit.metadata.prompt}
+        <div style={{ position: 'relative' }}>
+          <div
+            style={{
+              fontSize: 11,
+              color: theme.textMuted,
+              lineHeight: 1.4,
+              maxHeight: 80,
+              overflow: 'auto',
+              padding: '6px 32px 6px 8px',
+              background: theme.panel,
+              border: `1px solid ${theme.border}`,
+              borderRadius: theme.radius,
+            }}
+          >
+            {outfit.metadata.prompt}
+          </div>
+          <button
+            onClick={copyPrompt}
+            title="Copy prompt to clipboard"
+            style={{
+              position: 'absolute',
+              top: 4,
+              right: 4,
+              background:
+                promptCopyStatus === 'copied'
+                  ? '#2a5d2a'
+                  : promptCopyStatus === 'error'
+                    ? '#5d2a2a'
+                    : 'transparent',
+              color:
+                promptCopyStatus === 'copied' || promptCopyStatus === 'error'
+                  ? '#fff'
+                  : theme.textMuted,
+              border: `1px solid ${theme.border}`,
+              borderRadius: theme.radius,
+              padding: '2px 6px',
+              fontSize: 10,
+              cursor: 'pointer',
+              lineHeight: 1.3,
+            }}
+          >
+            {promptCopyStatus === 'copied' ? '✓' : promptCopyStatus === 'error' ? '!' : 'Copy'}
+          </button>
         </div>
       )}
 
@@ -162,7 +327,7 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
             <AssetThumb
               key={a.id}
               asset={a}
-              onDelete={() => onDeleteAsset(a.id)}
+              onDelete={() => handleDeleteAsset(a.id)}
               onPreview={() => setPreview({ blobId: a.blobId, caption: a.name })}
             />
           ))}
@@ -184,6 +349,46 @@ export function OutfitDetail({ outfit, onBack, onDeleteOutfit, onDeleteAsset, re
           caption={preview.caption}
           onClose={() => setPreview(null)}
         />
+      )}
+
+      {undoState && (
+        <div
+          role="alert"
+          style={{
+            position: 'sticky',
+            bottom: 8,
+            marginTop: 4,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'rgba(30,30,30,0.96)',
+            border: `1px solid ${theme.border}`,
+            borderRadius: theme.radius,
+            padding: '8px 10px',
+            fontSize: 12,
+            color: theme.text,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.5)',
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            Deleted {undoState.asset.name}. ({Math.max(0, Math.ceil((undoState.expiresAt - now) / 1000))}s)
+          </span>
+          <button
+            onClick={handleUndo}
+            style={{
+              background: 'transparent',
+              color: '#7c5cff',
+              border: `1px solid #7c5cff`,
+              borderRadius: theme.radius,
+              padding: '3px 10px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Undo
+          </button>
+        </div>
       )}
     </section>
   );

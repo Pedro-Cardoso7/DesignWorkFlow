@@ -48,6 +48,8 @@ export function App() {
               onBack={() => state.selectOutfit(null)}
               onDeleteOutfit={() => state.deleteOutfit(selectedOutfit.id)}
               onDeleteAsset={(assetId) => state.deleteAsset(assetId)}
+              onRestoreAsset={(asset, blob) => state.restoreAsset(asset, blob)}
+              onRename={(name) => state.renameOutfit(selectedOutfit.id, name)}
               refreshKey={state.outfitRefreshKey}
             />
           ) : (

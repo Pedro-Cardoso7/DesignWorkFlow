@@ -250,8 +250,8 @@ export function App() {
       return prev;
     });
 
-  const resizeRegion = (id: string, width: number, height: number) =>
-    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, rect: { ...r.rect, width, height } } : r)));
+  const resizeRegion = (id: string, rect: CropRect) =>
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, rect } : r)));
 
   const undo = () => {
     setHistory((h) => {
@@ -781,8 +781,10 @@ interface CropCanvasProps {
   onMoveStart: () => void;
   onMove: (id: string, x: number, y: number) => void;
   onResizeStart: () => void;
-  onResize: (id: string, width: number, height: number) => void;
+  onResize: (id: string, rect: CropRect) => void;
 }
+
+type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw';
 
 export interface CropCanvasHandle {
   cancelDrag: () => boolean;
@@ -805,8 +807,8 @@ interface MoveState {
 
 interface ResizeState {
   id: string;
-  originX: number;
-  originY: number;
+  handle: ResizeHandle;
+  initial: CropRect;
 }
 
 const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCanvas(
@@ -1020,10 +1022,33 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
     const onWinMove = (e: MouseEvent) => {
       const { x, y } = clientToCanvas(e.clientX, e.clientY);
       if (resize) {
-        const { curX, curY } = constrain(resize.originX, resize.originY, x, y);
-        const w = Math.max(4, curX - resize.originX);
-        const h = Math.max(4, curY - resize.originY);
-        onResize(resize.id, w / scale, h / scale);
+        const imgX = x / scale;
+        const imgY = y / scale;
+        const { initial, handle } = resize;
+        const right = initial.x + initial.width;
+        const bottom = initial.y + initial.height;
+        const minSize = 4 / scale;
+        let newX = initial.x;
+        let newY = initial.y;
+        let newW = initial.width;
+        let newH = initial.height;
+        if (handle === 'nw' || handle === 'sw') {
+          newX = Math.min(imgX, right - minSize);
+          newX = Math.max(0, newX);
+          newW = right - newX;
+        }
+        if (handle === 'ne' || handle === 'se') {
+          newW = Math.max(minSize, Math.min(image.width, imgX) - initial.x);
+        }
+        if (handle === 'nw' || handle === 'ne') {
+          newY = Math.min(imgY, bottom - minSize);
+          newY = Math.max(0, newY);
+          newH = bottom - newY;
+        }
+        if (handle === 'sw' || handle === 'se') {
+          newH = Math.max(minSize, Math.min(image.height, imgY) - initial.y);
+        }
+        onResize(resize.id, { x: newX, y: newY, width: newW, height: newH });
       } else if (move) {
         const nxDisp = Math.max(0, Math.min(dispW - move.width, x - move.grabDX));
         const nyDisp = Math.max(0, Math.min(dispH - move.height, y - move.grabDY));
@@ -1040,7 +1065,7 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
       window.removeEventListener('mousemove', onWinMove);
       window.removeEventListener('mouseup', onWinUp);
     };
-  }, [resize, move, scale, dispW, dispH, aspect, onMove, onResize]);
+  }, [resize, move, scale, dispW, dispH, image, onMove, onResize]);
 
   const hitTest = (x: number, y: number): Region | null => {
     for (let i = regions.length - 1; i >= 0; i--) {
@@ -1097,19 +1122,22 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
     onAdd({ x: x0, y: y0, width: w, height: h });
   };
 
-  const startResize = (r: Region, e: React.MouseEvent) => {
+  const startResize = (r: Region, handle: ResizeHandle, e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     onResizeStart();
-    setResize({ id: r.id, originX: r.rect.x * scale, originY: r.rect.y * scale });
+    setResize({ id: r.id, handle, initial: r.rect });
   };
+
+  const handleCursor = (h: ResizeHandle) =>
+    h === 'nw' || h === 'se' ? 'nwse-resize' : 'nesw-resize';
 
   const canvasCursor = panning
     ? 'grabbing'
     : spaceHeld
       ? 'grab'
       : resize
-        ? 'nwse-resize'
+        ? handleCursor(resize.handle)
         : move || hoverId
           ? 'move'
           : 'crosshair';
@@ -1128,47 +1156,64 @@ const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCa
           onMouseLeave={() => { setDrag(null); setHoverId(null); }}
           style={{ display: 'block', cursor: canvasCursor, border: `1px solid ${border}` }}
         />
-        {regions.map((r, i) => (
-          <div key={r.id}>
-            <button
-              onClick={() => onDelete(r.id)}
-              title={`Delete ${r.name}`}
-              style={{
-                position: 'absolute',
-                left: r.rect.x * scale + r.rect.width * scale - 22,
-                top: r.rect.y * scale + 2,
-                width: 20,
-                height: 20,
-                border: 'none',
-                borderRadius: '50%',
-                background: 'rgba(0,0,0,0.75)',
-                color: '#fff',
-                cursor: 'pointer',
-                fontSize: 12,
-                lineHeight: '18px',
-                padding: 0,
-              }}
-            >
-              {i + 1}
-            </button>
-            <div
-              onMouseDown={(e) => startResize(r, e)}
-              title={`Resize ${r.name}`}
-              style={{
-                position: 'absolute',
-                left: r.rect.x * scale + r.rect.width * scale - 8,
-                top: r.rect.y * scale + r.rect.height * scale - 8,
-                width: 14,
-                height: 14,
-                background: accent,
-                border: '2px solid #fff',
-                borderRadius: 2,
-                cursor: 'nwse-resize',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-        ))}
+        {regions.map((r, i) => {
+          const rx = r.rect.x * scale;
+          const ry = r.rect.y * scale;
+          const rw = r.rect.width * scale;
+          const rh = r.rect.height * scale;
+          const handles: { h: ResizeHandle; left: number; top: number }[] = [
+            { h: 'nw', left: rx - 7, top: ry - 7 },
+            { h: 'ne', left: rx + rw - 7, top: ry - 7 },
+            { h: 'se', left: rx + rw - 7, top: ry + rh - 7 },
+            { h: 'sw', left: rx - 7, top: ry + rh - 7 },
+          ];
+          return (
+            <div key={r.id}>
+              <button
+                onClick={() => onDelete(r.id)}
+                title={`Delete ${r.name}`}
+                style={{
+                  position: 'absolute',
+                  left: rx + 4,
+                  top: ry + 4,
+                  width: 20,
+                  height: 20,
+                  border: 'none',
+                  borderRadius: '50%',
+                  background: 'rgba(0,0,0,0.75)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  lineHeight: '18px',
+                  padding: 0,
+                  zIndex: 1,
+                }}
+              >
+                {i + 1}
+              </button>
+              {handles.map((hd) => (
+                <div
+                  key={hd.h}
+                  onMouseDown={(e) => startResize(r, hd.h, e)}
+                  title={`Resize ${r.name} (${hd.h.toUpperCase()})`}
+                  style={{
+                    position: 'absolute',
+                    left: hd.left,
+                    top: hd.top,
+                    width: 14,
+                    height: 14,
+                    background: accent,
+                    border: '2px solid #fff',
+                    borderRadius: 2,
+                    cursor: handleCursor(hd.h),
+                    boxSizing: 'border-box',
+                    zIndex: 2,
+                  }}
+                />
+              ))}
+            </div>
+          );
+        })}
       </div>
       <div
         title="Zoom (Ctrl+wheel, +/-, 0 to reset; Space+drag to pan)"
