@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { ExtensionMessage } from '../shared/messages';
 import type { CropRect, MJMetadata, Outfit, StagingImage } from '../shared/types';
 import {
@@ -42,6 +42,84 @@ export function App() {
   const [history, setHistory] = useState<Region[][]>([]);
   const [outfitName, setOutfitName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [aspect, setAspect] = useState<number | null>(null);
+  const [useDefaults, setUseDefaults] = useState(true);
+  const [saveDefaultsStatus, setSaveDefaultsStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const defaultsAppliedRef = useRef(false);
+  const canvasRef = useRef<CropCanvasHandle>(null);
+
+  useEffect(() => {
+    (async () => {
+      const flag = await loadUseDefaultsPref();
+      setUseDefaults(flag);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!image || !mode || mode.kind !== 'create') return;
+    if (defaultsAppliedRef.current) return;
+    defaultsAppliedRef.current = true;
+    (async () => {
+      const flag = await loadUseDefaultsPref();
+      console.log('[MJDW] useDefaults pref:', flag);
+      if (!flag) return;
+      const saved = await loadSavedDefaults();
+      console.log('[MJDW] loaded saved defaults:', saved);
+      const regs = saved
+        ? fromSavedDefaults(saved, image.width, image.height)
+        : buildDefaultOutfitRegions(image.width, image.height);
+      setRegions(regs);
+    })();
+  }, [image, mode]);
+
+  const toggleUseDefaults = async () => {
+    if (!image) return;
+    const next = !useDefaults;
+    setUseDefaults(next);
+    await saveUseDefaultsPref(next);
+    pushHistory(regions);
+    if (next) {
+      const saved = await loadSavedDefaults();
+      const regs = saved
+        ? fromSavedDefaults(saved, image.width, image.height)
+        : buildDefaultOutfitRegions(image.width, image.height);
+      setRegions(regs);
+    } else {
+      setRegions([]);
+    }
+  };
+
+  const saveAsDefaults = async () => {
+    if (!image || regions.length === 0) return;
+    setSaveDefaultsStatus('saving');
+    try {
+      await saveCurrentAsDefaults(regions, image.width, image.height);
+      const verify = await loadSavedDefaults();
+      console.log('[MJDW] saved defaults, verify readback:', verify);
+      if (!verify || verify.length !== regions.length) throw new Error('Readback mismatch');
+      setSaveDefaultsStatus('saved');
+      setTimeout(() => setSaveDefaultsStatus('idle'), 1500);
+    } catch (err) {
+      console.error('[MJDW] save defaults failed', err);
+      setSaveDefaultsStatus('error');
+      setTimeout(() => setSaveDefaultsStatus('idle'), 2500);
+    }
+  };
+  const reloadDefaults = async () => {
+    if (!image) return;
+    pushHistory(regions);
+    const saved = await loadSavedDefaults();
+    const regs = saved
+      ? fromSavedDefaults(saved, image.width, image.height)
+      : buildDefaultOutfitRegions(image.width, image.height);
+    setRegions(regs);
+  };
+  const clearAndReset = async () => {
+    if (!image) return;
+    await clearSavedDefaults();
+    pushHistory(regions);
+    setRegions(buildDefaultOutfitRegions(image.width, image.height));
+  };
 
   useEffect(() => {
     if (!stagingId && !outfitId) {
@@ -124,6 +202,24 @@ export function App() {
       return prev.filter((r) => r.id !== id);
     });
 
+  const moveRegionStart = () =>
+    setRegions((prev) => {
+      pushHistory(prev);
+      return prev;
+    });
+
+  const moveRegion = (id: string, x: number, y: number) =>
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, rect: { ...r.rect, x, y } } : r)));
+
+  const resizeRegionStart = () =>
+    setRegions((prev) => {
+      pushHistory(prev);
+      return prev;
+    });
+
+  const resizeRegion = (id: string, width: number, height: number) =>
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, rect: { ...r.rect, width, height } } : r)));
+
   const undo = () => {
     setHistory((h) => {
       if (h.length === 0) return h;
@@ -177,6 +273,59 @@ export function App() {
   const isEdit = mode?.kind === 'edit';
   const saveDisabled = saving || regions.length === 0 || (!isEdit && !outfitName.trim());
 
+  const kbdRef = useRef({ regions, history, saveDisabled, save, undo, deleteRegion });
+  kbdRef.current = { regions, history, saveDisabled, save, undo, deleteRegion };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const inField =
+        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+
+      if (e.key === 'Escape') {
+        if (canvasRef.current?.cancelDrag()) {
+          e.preventDefault();
+          return;
+        }
+        if (inField) {
+          (t as HTMLElement).blur();
+          return;
+        }
+        e.preventDefault();
+        window.close();
+        return;
+      }
+
+      const s = kbdRef.current;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        if (inField) return;
+        if (s.history.length === 0) return;
+        e.preventDefault();
+        s.undo();
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        if (s.saveDisabled) return;
+        e.preventDefault();
+        s.save();
+        return;
+      }
+
+      if (inField) return;
+
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        if (s.regions.length === 0) return;
+        e.preventDefault();
+        s.deleteRegion(s.regions[s.regions.length - 1].id);
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div style={{ minHeight: '100vh', background: bg, color: text, fontFamily: 'system-ui, sans-serif', display: 'flex', flexDirection: 'column' }}>
       <header style={{ padding: '12px 16px', borderBottom: `1px solid ${border}`, display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -198,6 +347,77 @@ export function App() {
         <span style={{ color: muted, fontSize: 12 }}>
           {regions.length} region{regions.length === 1 ? '' : 's'}
         </span>
+        <AspectToggle value={aspect} onChange={setAspect} />
+        {!isEdit && (
+          <>
+            <label
+              title="Toggle default Head/Top/Bottom/Shoes regions"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 12,
+                color: muted,
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={useDefaults}
+                onChange={toggleUseDefaults}
+                style={{ accentColor: accent, cursor: 'pointer' }}
+              />
+              Defaults
+            </label>
+            <button
+              onClick={saveAsDefaults}
+              disabled={regions.length === 0 || saveDefaultsStatus === 'saving'}
+              title="Save current region layout as defaults for next new outfit"
+              style={{
+                background: saveDefaultsStatus === 'saved' ? '#2a5d2a' : saveDefaultsStatus === 'error' ? '#5d2a2a' : 'transparent',
+                color: regions.length === 0 ? '#3a3a3a' : saveDefaultsStatus === 'saved' || saveDefaultsStatus === 'error' ? '#fff' : muted,
+                border: `1px solid ${border}`,
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 12,
+                cursor: regions.length === 0 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {saveDefaultsStatus === 'saving' ? 'Saving…' : saveDefaultsStatus === 'saved' ? 'Saved ✓' : saveDefaultsStatus === 'error' ? 'Failed' : 'Save as defaults'}
+            </button>
+            <button
+              onClick={reloadDefaults}
+              title="Reload saved defaults (or built-in if none saved)"
+              style={{
+                background: 'transparent',
+                color: muted,
+                border: `1px solid ${border}`,
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              Reload defaults
+            </button>
+            <button
+              onClick={clearAndReset}
+              title="Discard saved defaults and restore built-in 1:1 head/top/bottom/shoes"
+              style={{
+                background: 'transparent',
+                color: muted,
+                border: `1px solid ${border}`,
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              Restore built-in
+            </button>
+          </>
+        )}
         <button
           onClick={undo}
           disabled={history.length === 0}
@@ -210,13 +430,14 @@ export function App() {
             fontSize: 13,
             cursor: history.length === 0 ? 'not-allowed' : 'pointer',
           }}
-          title="Undo last add/delete"
+          title="Undo last add/delete (Ctrl+Z)"
         >
           Undo
         </button>
         <button
           onClick={save}
           disabled={saveDisabled}
+          title={isEdit ? 'Save changes (Enter)' : 'Save outfit (Enter)'}
           style={{
             background: saveDisabled ? '#3a3a3a' : accent,
             color: '#fff',
@@ -232,6 +453,7 @@ export function App() {
         </button>
         <button
           onClick={() => window.close()}
+          title="Cancel (Esc)"
           style={{ background: 'transparent', color: muted, border: `1px solid ${border}`, borderRadius: 4, padding: '6px 12px', fontSize: 13, cursor: 'pointer' }}
         >
           Cancel
@@ -245,7 +467,18 @@ export function App() {
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <main style={{ flex: 1, padding: 16, overflow: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
           {image ? (
-            <CropCanvas image={image} regions={regions} onAdd={addRegion} onDelete={deleteRegion} />
+            <CropCanvas
+              ref={canvasRef}
+              image={image}
+              regions={regions}
+              aspect={aspect}
+              onAdd={addRegion}
+              onDelete={deleteRegion}
+              onMoveStart={moveRegionStart}
+              onMove={moveRegion}
+              onResizeStart={resizeRegionStart}
+              onResize={resizeRegion}
+            />
           ) : imageUrl ? (
             <div style={{ color: muted }}>Loading image…</div>
           ) : !error ? (
@@ -299,17 +532,97 @@ export function App() {
   );
 }
 
+const ASPECT_PRESETS: { label: string; value: number | null }[] = [
+  { label: 'Free', value: null },
+  { label: '1:1', value: 1 },
+  { label: '4:3', value: 4 / 3 },
+  { label: '3:4', value: 3 / 4 },
+  { label: '16:9', value: 16 / 9 },
+  { label: '9:16', value: 9 / 16 },
+];
+
+function AspectToggle({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+  return (
+    <div style={{ display: 'flex', gap: 2, border: `1px solid ${border}`, borderRadius: 4, padding: 2 }} title="Constrain crop aspect ratio">
+      {ASPECT_PRESETS.map((p) => {
+        const active = p.value === value;
+        return (
+          <button
+            key={p.label}
+            onClick={() => onChange(p.value)}
+            style={{
+              background: active ? accent : 'transparent',
+              color: active ? '#fff' : muted,
+              border: 'none',
+              borderRadius: 3,
+              padding: '4px 8px',
+              fontSize: 11,
+              fontWeight: active ? 600 : 400,
+              cursor: 'pointer',
+            }}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 interface CropCanvasProps {
   image: HTMLImageElement;
   regions: Region[];
+  aspect: number | null;
   onAdd: (rect: CropRect) => void;
   onDelete: (id: string) => void;
+  onMoveStart: () => void;
+  onMove: (id: string, x: number, y: number) => void;
+  onResizeStart: () => void;
+  onResize: (id: string, width: number, height: number) => void;
 }
 
-function CropCanvas({ image, regions, onAdd, onDelete }: CropCanvasProps) {
+export interface CropCanvasHandle {
+  cancelDrag: () => boolean;
+}
+
+interface MoveState {
+  id: string;
+  grabDX: number;
+  grabDY: number;
+  width: number;
+  height: number;
+}
+
+interface ResizeState {
+  id: string;
+  originX: number;
+  originY: number;
+}
+
+const CropCanvas = forwardRef<CropCanvasHandle, CropCanvasProps>(function CropCanvas(
+  { image, regions, aspect, onAdd, onDelete, onMoveStart, onMove, onResizeStart, onResize },
+  ref,
+) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [scale, setScale] = useState(1);
   const [drag, setDrag] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null);
+  const [move, setMove] = useState<MoveState | null>(null);
+  const [resize, setResize] = useState<ResizeState | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      cancelDrag: () => {
+        if (drag) {
+          setDrag(null);
+          return true;
+        }
+        return false;
+      },
+    }),
+    [drag],
+  );
 
   useEffect(() => {
     const maxW = Math.min(window.innerWidth - 320, 1400);
@@ -363,16 +676,106 @@ function CropCanvas({ image, regions, onAdd, onDelete }: CropCanvasProps) {
     };
   };
 
+  const constrain = (startX: number, startY: number, curX: number, curY: number) => {
+    if (aspect == null) return { curX, curY };
+    const dx = curX - startX;
+    const dy = curY - startY;
+    const signX = dx < 0 ? -1 : 1;
+    const signY = dy < 0 ? -1 : 1;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    const t = Math.max(0, (ax * aspect + ay) / (aspect * aspect + 1));
+    let w = t * aspect;
+    let h = t;
+    const maxW = signX > 0 ? dispW - startX : startX;
+    const maxH = signY > 0 ? dispH - startY : startY;
+    if (w > maxW) {
+      w = maxW;
+      h = w / aspect;
+    }
+    if (h > maxH) {
+      h = maxH;
+      w = h * aspect;
+    }
+    return { curX: startX + signX * w, curY: startY + signY * h };
+  };
+
+  const clientToCanvas = (clientX: number, clientY: number) => {
+    const rect = canvasRef.current!.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(dispW, clientX - rect.left)),
+      y: Math.max(0, Math.min(dispH, clientY - rect.top)),
+    };
+  };
+
+  useEffect(() => {
+    if (!resize && !move) return;
+    const onWinMove = (e: MouseEvent) => {
+      const { x, y } = clientToCanvas(e.clientX, e.clientY);
+      if (resize) {
+        const { curX, curY } = constrain(resize.originX, resize.originY, x, y);
+        const w = Math.max(4, curX - resize.originX);
+        const h = Math.max(4, curY - resize.originY);
+        onResize(resize.id, w / scale, h / scale);
+      } else if (move) {
+        const nxDisp = Math.max(0, Math.min(dispW - move.width, x - move.grabDX));
+        const nyDisp = Math.max(0, Math.min(dispH - move.height, y - move.grabDY));
+        onMove(move.id, nxDisp / scale, nyDisp / scale);
+      }
+    };
+    const onWinUp = () => {
+      setResize(null);
+      setMove(null);
+    };
+    window.addEventListener('mousemove', onWinMove);
+    window.addEventListener('mouseup', onWinUp);
+    return () => {
+      window.removeEventListener('mousemove', onWinMove);
+      window.removeEventListener('mouseup', onWinUp);
+    };
+  }, [resize, move, scale, dispW, dispH, aspect, onMove, onResize]);
+
+  const hitTest = (x: number, y: number): Region | null => {
+    for (let i = regions.length - 1; i >= 0; i--) {
+      const r = regions[i];
+      const rx = r.rect.x * scale;
+      const ry = r.rect.y * scale;
+      const rw = r.rect.width * scale;
+      const rh = r.rect.height * scale;
+      if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return r;
+    }
+    return null;
+  };
+
   const onMouseDown = (e: React.MouseEvent) => {
     const { x, y } = toCanvasCoords(e);
+    const hit = hitTest(x, y);
+    if (hit) {
+      onMoveStart();
+      setMove({
+        id: hit.id,
+        grabDX: x - hit.rect.x * scale,
+        grabDY: y - hit.rect.y * scale,
+        width: hit.rect.width * scale,
+        height: hit.rect.height * scale,
+      });
+      return;
+    }
     setDrag({ startX: x, startY: y, curX: x, curY: y });
   };
   const onMouseMove = (e: React.MouseEvent) => {
-    if (!drag) return;
+    if (resize || move) return;
     const { x, y } = toCanvasCoords(e);
-    setDrag({ ...drag, curX: x, curY: y });
+    if (drag) {
+      const { curX, curY } = constrain(drag.startX, drag.startY, x, y);
+      setDrag({ ...drag, curX, curY });
+      return;
+    }
+    const hit = hitTest(x, y);
+    setHoverId(hit ? hit.id : null);
   };
   const onMouseUp = () => {
+    if (resize || move) return;
     if (!drag) return;
     const x0 = Math.min(drag.startX, drag.curX) / scale;
     const y0 = Math.min(drag.startY, drag.curY) / scale;
@@ -382,6 +785,13 @@ function CropCanvas({ image, regions, onAdd, onDelete }: CropCanvasProps) {
     onAdd({ x: x0, y: y0, width: w, height: h });
   };
 
+  const startResize = (r: Region, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onResizeStart();
+    setResize({ id: r.id, originX: r.rect.x * scale, originY: r.rect.y * scale });
+  };
+
   return (
     <div style={{ position: 'relative' }}>
       <canvas
@@ -389,35 +799,139 @@ function CropCanvas({ image, regions, onAdd, onDelete }: CropCanvasProps) {
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
-        onMouseLeave={() => setDrag(null)}
-        style={{ display: 'block', cursor: 'crosshair', border: `1px solid ${border}` }}
+        onMouseLeave={() => { setDrag(null); setHoverId(null); }}
+        style={{ display: 'block', cursor: resize ? 'nwse-resize' : move || hoverId ? 'move' : 'crosshair', border: `1px solid ${border}` }}
       />
       {regions.map((r, i) => (
-        <button
-          key={r.id}
-          onClick={() => onDelete(r.id)}
-          title={`Delete ${r.name}`}
-          style={{
-            position: 'absolute',
-            left: r.rect.x * scale + r.rect.width * scale - 22,
-            top: r.rect.y * scale + 2,
-            width: 20,
-            height: 20,
-            border: 'none',
-            borderRadius: '50%',
-            background: 'rgba(0,0,0,0.75)',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: 12,
-            lineHeight: '18px',
-            padding: 0,
-          }}
-        >
-          {i + 1}
-        </button>
+        <div key={r.id}>
+          <button
+            onClick={() => onDelete(r.id)}
+            title={`Delete ${r.name}`}
+            style={{
+              position: 'absolute',
+              left: r.rect.x * scale + r.rect.width * scale - 22,
+              top: r.rect.y * scale + 2,
+              width: 20,
+              height: 20,
+              border: 'none',
+              borderRadius: '50%',
+              background: 'rgba(0,0,0,0.75)',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: 12,
+              lineHeight: '18px',
+              padding: 0,
+            }}
+          >
+            {i + 1}
+          </button>
+          <div
+            onMouseDown={(e) => startResize(r, e)}
+            title={`Resize ${r.name}`}
+            style={{
+              position: 'absolute',
+              left: r.rect.x * scale + r.rect.width * scale - 8,
+              top: r.rect.y * scale + r.rect.height * scale - 8,
+              width: 14,
+              height: 14,
+              background: accent,
+              border: '2px solid #fff',
+              borderRadius: 2,
+              cursor: 'nwse-resize',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
       ))}
     </div>
   );
+});
+
+const DEFAULT_OUTFIT_BANDS: { name: string; sideFactor: number; yFrac: number }[] = [
+  { name: 'Head', sideFactor: 0.18, yFrac: 0.02 },
+  { name: 'Top', sideFactor: 0.35, yFrac: 0.20 },
+  { name: 'Bottom', sideFactor: 0.35, yFrac: 0.50 },
+  { name: 'Shoes', sideFactor: 0.18, yFrac: 0.80 },
+];
+
+function buildDefaultOutfitRegions(imgW: number, imgH: number): Region[] {
+  return DEFAULT_OUTFIT_BANDS.map((b) => {
+    const side = Math.min(imgH * b.sideFactor, imgW);
+    return {
+      id: crypto.randomUUID(),
+      name: b.name,
+      rect: {
+        x: (imgW - side) / 2,
+        y: Math.min(imgH * b.yFrac, imgH - side),
+        width: side,
+        height: side,
+      },
+    };
+  });
+}
+
+const CROP_DEFAULTS_KEY = 'mjdw_crop_defaults_v1';
+
+interface SavedDefault {
+  name: string;
+  xFrac: number;
+  yFrac: number;
+  wFrac: number;
+  hFrac: number;
+}
+
+async function loadSavedDefaults(): Promise<SavedDefault[] | null> {
+  try {
+    const res = await chrome.storage.local.get(CROP_DEFAULTS_KEY);
+    const val = res[CROP_DEFAULTS_KEY];
+    return Array.isArray(val) && val.length > 0 ? (val as SavedDefault[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function fromSavedDefaults(saved: SavedDefault[], imgW: number, imgH: number): Region[] {
+  return saved.map((s) => ({
+    id: crypto.randomUUID(),
+    name: s.name,
+    rect: {
+      x: Math.max(0, Math.min(imgW, s.xFrac * imgW)),
+      y: Math.max(0, Math.min(imgH, s.yFrac * imgH)),
+      width: Math.max(1, Math.min(imgW, s.wFrac * imgW)),
+      height: Math.max(1, Math.min(imgH, s.hFrac * imgH)),
+    },
+  }));
+}
+
+async function saveCurrentAsDefaults(regions: Region[], imgW: number, imgH: number) {
+  const toSave: SavedDefault[] = regions.map((r) => ({
+    name: r.name,
+    xFrac: r.rect.x / imgW,
+    yFrac: r.rect.y / imgH,
+    wFrac: r.rect.width / imgW,
+    hFrac: r.rect.height / imgH,
+  }));
+  await chrome.storage.local.set({ [CROP_DEFAULTS_KEY]: toSave });
+}
+
+async function clearSavedDefaults() {
+  await chrome.storage.local.remove(CROP_DEFAULTS_KEY);
+}
+
+const USE_DEFAULTS_KEY = 'mjdw_use_default_crops_v1';
+
+async function loadUseDefaultsPref(): Promise<boolean> {
+  try {
+    const res = await chrome.storage.local.get(USE_DEFAULTS_KEY);
+    const val = res[USE_DEFAULTS_KEY];
+    return typeof val === 'boolean' ? val : true;
+  } catch {
+    return true;
+  }
+}
+
+async function saveUseDefaultsPref(v: boolean) {
+  await chrome.storage.local.set({ [USE_DEFAULTS_KEY]: v });
 }
 
 function deriveDefaultName(s: StagingImage): string {

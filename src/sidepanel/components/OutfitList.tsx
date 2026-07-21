@@ -51,6 +51,7 @@ export function OutfitList({ outfits, onOpen }: OutfitListProps) {
 
 function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +63,21 @@ function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) 
       cancelled = true;
     };
   }, [outfit.id]);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    (async () => {
+      const blob = await getBlob(outfit.sourceImageBlobId);
+      if (cancelled || !blob) return;
+      objectUrl = URL.createObjectURL(blob);
+      setSourceUrl(objectUrl);
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [outfit.sourceImageBlobId]);
 
   return (
     <li
@@ -75,10 +91,33 @@ function OutfitCard({ outfit, onOpen }: { outfit: Outfit; onOpen: () => void }) 
         cursor: 'pointer',
       }}
     >
-      <div style={{ fontWeight: 500 }}>{outfit.name}</div>
-      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
-        {outfit.assetIds.length} asset{outfit.assetIds.length === 1 ? '' : 's'}
-        {outfit.metadata.prompt ? ` — ${truncate(outfit.metadata.prompt, 60)}` : ''}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <div
+          style={{
+            width: 56,
+            height: 56,
+            flexShrink: 0,
+            background: theme.input,
+            borderRadius: theme.radius,
+            border: `1px solid ${theme.border}`,
+            overflow: 'hidden',
+          }}
+        >
+          {sourceUrl && (
+            <img
+              src={sourceUrl}
+              alt={outfit.name}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+          )}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 500 }}>{outfit.name}</div>
+          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
+            {outfit.assetIds.length} asset{outfit.assetIds.length === 1 ? '' : 's'}
+            {outfit.metadata.prompt ? ` — ${truncate(outfit.metadata.prompt, 60)}` : ''}
+          </div>
+        </div>
       </div>
       {assets.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 8 }}>
