@@ -1,16 +1,22 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { importCollectionZip, type ImportResult } from '../../shared/import';
+import { setActiveCollectionId } from '../../shared/db';
 import { exportCollectionZip } from '../../shared/zip';
 import type { ExportMode } from '../../shared/manifest';
 import { buttonStyle, theme } from '../theme';
 
 interface Props {
   activeCollectionId: string | null;
+  onImported: () => void | Promise<void>;
 }
 
-export function ExportBar({ activeCollectionId }: Props) {
+export function ExportBar({ activeCollectionId, onImported }: Props) {
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
   const [mode, setMode] = useState<ExportMode>('by-outfit');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const exportZip = async () => {
     if (!activeCollectionId) return;
@@ -22,6 +28,36 @@ export function ExportBar({ activeCollectionId }: Props) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const triggerImport = () => {
+    fileRef.current?.click();
+  };
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    setError(null);
+    setImportNote(null);
+    try {
+      const result: ImportResult = await importCollectionZip(file);
+      await setActiveCollectionId(result.collectionId);
+      await onImported();
+      const warn = result.warnings.length
+        ? ` — ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (see console)`
+        : '';
+      if (result.warnings.length) console.warn('[MJDW] import warnings:', result.warnings);
+      setImportNote(
+        `Imported "${result.collectionName}": ${result.outfitsImported} outfit${result.outfitsImported === 1 ? '' : 's'}, ${result.stagingImported} staged${warn}`,
+      );
+      setTimeout(() => setImportNote(null), 6000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -42,7 +78,23 @@ export function ExportBar({ activeCollectionId }: Props) {
         >
           {exporting ? 'Zipping…' : 'Export ZIP'}
         </button>
+        <button
+          style={buttonStyle('ghost')}
+          onClick={triggerImport}
+          disabled={importing}
+          title="Import a ZIP previously created by Export"
+        >
+          {importing ? 'Importing…' : 'Import ZIP'}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".zip,application/zip"
+          onChange={handleFile}
+          style={{ display: 'none' }}
+        />
       </div>
+      {importNote && <div style={noteStyle}>{importNote}</div>}
       {error && <div style={errorStyle}>{error}</div>}
     </div>
   );
@@ -83,5 +135,14 @@ const errorStyle: React.CSSProperties = {
   padding: '6px 8px',
   background: 'rgba(224,88,88,0.08)',
   border: `1px solid ${theme.danger}`,
+  borderRadius: theme.radius,
+};
+
+const noteStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: theme.text,
+  padding: '6px 8px',
+  background: 'rgba(124,92,255,0.10)',
+  border: `1px solid ${theme.accent}`,
   borderRadius: theme.radius,
 };

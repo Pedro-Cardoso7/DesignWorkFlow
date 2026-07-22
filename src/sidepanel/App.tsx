@@ -72,7 +72,10 @@ export function App() {
       </div>
 
       <ErrorTray />
-      <ExportBar activeCollectionId={state.activeCollection?.id ?? null} />
+      <ExportBar
+        activeCollectionId={state.activeCollection?.id ?? null}
+        onImported={state.reload}
+      />
     </div>
   );
 }

@@ -220,6 +220,88 @@ export async function getAssetsForCollection(collectionId: string): Promise<Asse
   return results;
 }
 
+export interface ImportAssetInput {
+  name: string;
+  crop: CropRect;
+  blob: Blob;
+  type: AssetType;
+  createdAt: number;
+}
+
+/**
+ * Import an outfit with preserved timestamps (used by ZIP import). Unlike
+ * createOutfitWithAssets, this preserves manifest-supplied createdAt values.
+ */
+export async function importOutfit(
+  collectionId: string,
+  name: string,
+  createdAt: number,
+  sourceBlob: Blob,
+  metadata: MJMetadata,
+  assets: ImportAssetInput[],
+): Promise<Outfit> {
+  const db = await getDb();
+  const outfitId = crypto.randomUUID();
+  const sourceBlobId = crypto.randomUUID();
+  const outfitAssets: Asset[] = assets.map((a) => ({
+    id: crypto.randomUUID(),
+    outfitId,
+    name: a.name.trim() || 'Untitled',
+    createdAt: a.createdAt,
+    crop: a.crop,
+    blobId: crypto.randomUUID(),
+    type: a.type,
+  }));
+  const outfit: Outfit = {
+    id: outfitId,
+    collectionId,
+    name: name.trim() || 'Untitled outfit',
+    createdAt,
+    sourceImageBlobId: sourceBlobId,
+    assetIds: outfitAssets.map((a) => a.id),
+    metadata,
+  };
+
+  const tx = db.transaction(['blobs', 'outfits', 'assets', 'collections'], 'readwrite');
+  await tx.objectStore('blobs').put(sourceBlob, sourceBlobId);
+  for (let i = 0; i < outfitAssets.length; i++) {
+    await tx.objectStore('blobs').put(assets[i].blob, outfitAssets[i].blobId);
+    await tx.objectStore('assets').put(outfitAssets[i]);
+  }
+  await tx.objectStore('outfits').put(outfit);
+  const collection = await tx.objectStore('collections').get(collectionId);
+  if (collection) {
+    await tx.objectStore('collections').put({
+      ...collection,
+      outfitIds: [...collection.outfitIds, outfit.id],
+    });
+  }
+  await tx.done;
+  return outfit;
+}
+
+export async function importStagingImage(
+  collectionId: string,
+  addedAt: number,
+  blob: Blob,
+  metadata: MJMetadata,
+): Promise<StagingImage> {
+  const db = await getDb();
+  const blobId = crypto.randomUUID();
+  const staging: StagingImage = {
+    id: crypto.randomUUID(),
+    collectionId,
+    addedAt,
+    blobId,
+    metadata,
+  };
+  const tx = db.transaction(['blobs', 'staging'], 'readwrite');
+  await tx.objectStore('blobs').put(blob, blobId);
+  await tx.objectStore('staging').put(staging);
+  await tx.done;
+  return staging;
+}
+
 /**
  * Move an outfit back to staging: duplicate the source blob into a fresh
  * staging entry, then delete the outfit (and its assets). Metadata preserved.
