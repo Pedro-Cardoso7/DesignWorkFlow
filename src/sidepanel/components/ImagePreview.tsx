@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { getBlob } from '../../shared/db';
 import { theme } from '../theme';
 
@@ -6,9 +6,31 @@ interface Props {
   blobId: string;
   caption?: string | null;
   onClose: () => void;
+  onPrev?: () => void;
+  onNext?: () => void;
 }
 
-export function ImagePreview({ blobId, caption, onClose }: Props) {
+const navBtn = (side: 'left' | 'right'): React.CSSProperties => ({
+  position: 'absolute',
+  top: '50%',
+  [side]: 12,
+  transform: 'translateY(-50%)',
+  width: 36,
+  height: 36,
+  borderRadius: '50%',
+  border: 'none',
+  background: 'rgba(255,255,255,0.15)',
+  color: '#fff',
+  cursor: 'pointer',
+  fontSize: 22,
+  lineHeight: '34px',
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
+export function ImagePreview({ blobId, caption, onClose, onPrev, onNext }: Props) {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,10 +51,12 @@ export function ImagePreview({ blobId, caption, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); onPrev?.(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); onNext?.(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, onPrev, onNext]);
 
   return (
     <div
@@ -71,6 +95,24 @@ export function ImagePreview({ blobId, caption, onClose }: Props) {
       >
         ×
       </button>
+      {onPrev && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onPrev(); }}
+          aria-label="Previous image"
+          style={navBtn('left')}
+        >
+          ‹
+        </button>
+      )}
+      {onNext && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onNext(); }}
+          aria-label="Next image"
+          style={navBtn('right')}
+        >
+          ›
+        </button>
+      )}
       {url ? (
         <img
           src={url}

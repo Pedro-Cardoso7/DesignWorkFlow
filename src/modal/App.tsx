@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { ExtensionMessage } from '../shared/messages';
-import type { AssetType, CropRect, MJMetadata, Outfit, StagingImage } from '../shared/types';
-import { ASSET_TYPES, inferAssetTypeFromName } from '../shared/types';
+import type { AssetType, CropRect, Gender, MJMetadata, Outfit, StagingImage } from '../shared/types';
+import { ASSET_TYPES, GENDERS, inferAssetTypeFromName } from '../shared/types';
 import { deriveOutfitNameFromStaging } from '../shared/naming';
 import {
   createOutfitWithAssets,
@@ -18,6 +18,7 @@ interface Region {
   name: string;
   rect: CropRect;
   type: AssetType;
+  gender: Gender;
 }
 
 const bg = '#151515';
@@ -194,6 +195,7 @@ export function App() {
               name: a.name,
               rect: a.crop,
               type: a.type ?? inferAssetTypeFromName(a.name),
+              gender: a.gender ?? 'female',
             })),
           );
         }
@@ -233,7 +235,7 @@ export function App() {
       const name = `Region ${prev.length + 1}`;
       return [
         ...prev,
-        { id: crypto.randomUUID(), name, rect, type: inferAssetTypeFromName(name) },
+        { id: crypto.randomUUID(), name, rect, type: inferAssetTypeFromName(name), gender: 'female' as Gender },
       ];
     });
   };
@@ -249,6 +251,9 @@ export function App() {
 
   const setRegionType = (id: string, type: AssetType) =>
     setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, type } : r)));
+
+  const setRegionGender = (id: string, gender: Gender) =>
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, gender } : r)));
 
   const deleteRegion = (id: string) =>
     setRegions((prev) => {
@@ -290,7 +295,7 @@ export function App() {
       const crops: CropInput[] = [];
       for (const region of regions) {
         const blob = await cropBlob(image, region.rect);
-        crops.push({ name: region.name, crop: region.rect, blob, type: region.type });
+        crops.push({ name: region.name, crop: region.rect, blob, type: region.type, gender: region.gender });
       }
       if (mode.kind === 'create') {
         const sourceBlob = await getBlob(mode.staging.blobId);
@@ -619,26 +624,43 @@ export function App() {
                       ×
                     </button>
                   </div>
-                  <select
-                    value={r.type}
-                    onChange={(e) => setRegionType(r.id, e.target.value as AssetType)}
-                    title="Asset type — controls by-type export folder"
-                    style={{
-                      marginLeft: 20,
-                      background: bg,
-                      color: text,
-                      border: `1px solid ${border}`,
-                      borderRadius: 4,
-                      padding: '3px 6px',
-                      fontSize: 11,
-                    }}
-                  >
-                    {ASSET_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
+                  <div style={{ marginLeft: 20, display: 'flex', gap: 4 }}>
+                    <select
+                      value={r.type}
+                      onChange={(e) => setRegionType(r.id, e.target.value as AssetType)}
+                      title="Asset type — controls by-type export folder"
+                      style={{
+                        flex: 1,
+                        background: bg,
+                        color: text,
+                        border: `1px solid ${border}`,
+                        borderRadius: 4,
+                        padding: '3px 6px',
+                        fontSize: 11,
+                      }}
+                    >
+                      {ASSET_TYPES.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={r.gender}
+                      onChange={(e) => setRegionGender(r.id, e.target.value as Gender)}
+                      title="Gender tag"
+                      style={{
+                        background: bg,
+                        color: r.gender === 'female' ? '#e87dac' : r.gender === 'male' ? '#7db8e8' : muted,
+                        border: `1px solid ${border}`,
+                        borderRadius: 4,
+                        padding: '3px 6px',
+                        fontSize: 11,
+                      }}
+                    >
+                      {GENDERS.map((g) => (
+                        <option key={g} value={g}>{g[0].toUpperCase()}</option>
+                      ))}
+                    </select>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1339,6 +1361,7 @@ function buildDefaultOutfitRegions(imgW: number, imgH: number): Region[] {
         height: side,
       },
       type: inferAssetTypeFromName(b.name),
+      gender: 'female' as Gender,
     };
   });
 }
@@ -1352,6 +1375,7 @@ interface SavedDefault {
   wFrac: number;
   hFrac: number;
   type?: AssetType;
+  gender?: Gender;
 }
 
 async function loadSavedDefaults(): Promise<SavedDefault[] | null> {
@@ -1375,6 +1399,7 @@ function fromSavedDefaults(saved: SavedDefault[], imgW: number, imgH: number): R
       height: Math.max(1, Math.min(imgH, s.hFrac * imgH)),
     },
     type: s.type ?? inferAssetTypeFromName(s.name),
+    gender: (s.gender ?? 'female') as Gender,
   }));
 }
 
@@ -1386,6 +1411,7 @@ async function saveCurrentAsDefaults(regions: Region[], imgW: number, imgH: numb
     wFrac: r.rect.width / imgW,
     hFrac: r.rect.height / imgH,
     type: r.type,
+    gender: r.gender,
   }));
   await chrome.storage.local.set({ [CROP_DEFAULTS_KEY]: toSave });
 }

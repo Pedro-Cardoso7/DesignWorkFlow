@@ -14,6 +14,8 @@ interface PreviewTarget {
 interface Props {
   outfit: Outfit;
   onBack: () => void;
+  onPrev: (() => void) | null;
+  onNext: (() => void) | null;
   onDeleteOutfit: () => void | Promise<void>;
   onDeleteAsset: (assetId: string) => Promise<{ asset: Asset; blob: Blob } | null>;
   onRestoreAsset: (asset: Asset, blob: Blob) => Promise<void>;
@@ -34,6 +36,8 @@ interface UndoState {
 export function OutfitDetail({
   outfit,
   onBack,
+  onPrev,
+  onNext,
   onDeleteOutfit,
   onDeleteAsset,
   onRestoreAsset,
@@ -56,6 +60,16 @@ export function OutfitDetail({
   useEffect(() => {
     if (editingName) nameInputRef.current?.select();
   }, [editingName]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (editingName || preview) return;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); onPrev?.(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); onNext?.(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [editingName, preview, onPrev, onNext]);
 
   const commitName = async () => {
     const next = nameDraft.trim();
@@ -178,6 +192,22 @@ export function OutfitDetail({
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <button style={buttonStyle('ghost')} onClick={onBack} title="Back to list">
           ← Back
+        </button>
+        <button
+          style={{ ...buttonStyle('ghost'), padding: '6px 8px', opacity: onPrev ? 1 : 0.3 }}
+          onClick={() => onPrev?.()}
+          disabled={!onPrev}
+          title="Previous outfit (←)"
+        >
+          ‹
+        </button>
+        <button
+          style={{ ...buttonStyle('ghost'), padding: '6px 8px', opacity: onNext ? 1 : 0.3 }}
+          onClick={() => onNext?.()}
+          disabled={!onNext}
+          title="Next outfit (→)"
+        >
+          ›
         </button>
         {editingName ? (
           <input

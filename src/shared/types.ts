@@ -27,6 +27,9 @@ export const ASSET_TYPES = [
 ] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
 
+export type Gender = 'female' | 'male' | 'unisex';
+export const GENDERS: Gender[] = ['female', 'male', 'unisex'];
+
 export interface Asset {
   id: string;
   outfitId: string;
@@ -35,6 +38,7 @@ export interface Asset {
   crop: CropRect;
   blobId: string;
   type: AssetType;
+  gender: Gender;
 }
 
 export function inferAssetTypeFromName(name: string): AssetType {

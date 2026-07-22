@@ -187,7 +187,11 @@ export async function getStaging(id: string): Promise<StagingImage | undefined> 
 }
 
 function normalizeAsset(a: Asset): Asset {
-  return a.type ? a : { ...a, type: 'other' };
+  return {
+    ...a,
+    type: a.type ?? 'other',
+    gender: a.gender ?? 'female',
+  };
 }
 
 export async function getAssetsForOutfit(outfitId: string): Promise<Asset[]> {
@@ -417,6 +421,7 @@ export async function replaceOutfitAssets(
     crop: c.crop,
     blobId: crypto.randomUUID(),
     type: c.type ?? 'other',
+    gender: c.gender ?? 'female',
   }));
   for (let i = 0; i < newAssets.length; i++) {
     await tx.objectStore('blobs').put(crops[i].blob, newAssets[i].blobId);
@@ -434,6 +439,7 @@ export interface CropInput {
   crop: CropRect;
   blob: Blob;
   type?: AssetType;
+  gender?: import('./types').Gender;
 }
 
 /**
@@ -459,6 +465,7 @@ export async function createOutfitWithAssets(
     crop: c.crop,
     blobId: crypto.randomUUID(),
     type: c.type ?? 'other',
+    gender: c.gender ?? 'female',
   }));
   const outfit: Outfit = {
     id: outfitId,
