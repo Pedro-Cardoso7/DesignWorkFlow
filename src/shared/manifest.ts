@@ -1,4 +1,4 @@
-import type { Asset, AssetType, Collection, MJMetadata, Outfit } from './types';
+import type { Asset, AssetType, Collection, Gender, MJMetadata, Outfit } from './types';
 
 export interface AssetManifestEntry {
   name: string;
@@ -6,6 +6,7 @@ export interface AssetManifestEntry {
   crop: { x: number; y: number; width: number; height: number };
   createdAt: number;
   type: AssetType;
+  gender: Gender;
 }
 
 export interface OutfitManifestEntry {
@@ -91,6 +92,7 @@ export function buildManifest(
         crop: asset.crop,
         createdAt: asset.createdAt,
         type: asset.type,
+        gender: asset.gender ?? 'female',
       })),
     };
   });

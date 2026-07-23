@@ -75,7 +75,7 @@ export async function buildCollectionTree(
       {
         folder: (o) => outfitFolders.get(o.id)!,
         sourceFile: () => 'outfit.png',
-        assetFile: (_o, _a, i) => `asset-${i + 1}.png`,
+        assetFile: (_o, a, i) => `${a.gender ?? 'female'}/asset-${i + 1}.png`,
       },
     );
     manifest.staging = stagingManifest;
@@ -92,21 +92,24 @@ export async function buildCollectionTree(
       }
       const assets = assetsByOutfit.get(outfit.id) ?? [];
       for (let i = 0; i < assets.length; i++) {
+        const gender = assets[i].gender ?? 'female';
         const blob = await getBlob(assets[i].blobId);
         if (blob) {
-          files.push({ path: `${rootFolder}/${folder}/asset-${i + 1}.png`, blob });
+          files.push({ path: `${rootFolder}/${folder}/${gender}/asset-${i + 1}.png`, blob });
         }
       }
     }
   } else {
     const assetFileNames = new Map<string, string>();
-    const usedByType = new Map<string, Set<string>>();
+    const usedByGenderType = new Map<string, Set<string>>();
     for (const outfit of outfits) {
       const outfitFolder = outfitFolders.get(outfit.id)!;
       const assets = assetsByOutfit.get(outfit.id) ?? [];
       for (const asset of assets) {
+        const gender = asset.gender ?? 'female';
         const type = asset.type;
-        const used = usedByType.get(type) ?? new Set<string>();
+        const key = `${gender}/${type}`;
+        const used = usedByGenderType.get(key) ?? new Set<string>();
         const base = `${outfitFolder}__${sanitizeName(asset.name)}`;
         let name = `${base}.png`;
         let n = 2;
@@ -114,8 +117,8 @@ export async function buildCollectionTree(
           name = `${base} (${n++}).png`;
         }
         used.add(name.toLowerCase());
-        usedByType.set(type, used);
-        assetFileNames.set(asset.id, `${type}/${name}`);
+        usedByGenderType.set(key, used);
+        assetFileNames.set(asset.id, `${gender}/${type}/${name}`);
       }
     }
 

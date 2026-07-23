@@ -29,6 +29,13 @@ export function getDb(): Promise<IDBPDatabase<DesignWorkflowDB>> {
         db.createObjectStore('blobs');
         db.createObjectStore('meta');
       },
+      terminated() {
+        dbPromise = null;
+      },
+    }).then((db) => {
+      db.onclose = () => { dbPromise = null; };
+      db.onversionchange = () => { db.close(); dbPromise = null; };
+      return db;
     });
   }
   return dbPromise;
